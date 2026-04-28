@@ -1,0 +1,43 @@
+Non Sequitur Publishing — White Paper Rights License (v1.0, effective 2026-04-28)
+
+Copyright (c) 2026 Non Sequitur Publishing. All rights reserved.
+
+This repository contains canonical published artifacts of the Non Sequitur
+Publishing imprint of Yeti Knowledge Systems. The full rights envelope is
+published at:
+
+  https://nonsequitur.tech/pubs/citation-policy/
+
+That URL is the authoritative version; this file is a binding summary.
+
+CITATION IS PERMITTED without prior permission, provided you include full
+attribution:
+
+  - Author name as listed on the paper
+  - Title of the paper, exactly as published
+  - Year of publication
+  - Publisher: Non Sequitur Publishing
+  - URL on nonsequitur.tech, or a registered DOI / SSRN / arXiv ID if shown
+    on the paper's page
+
+THE FOLLOWING ARE NOT PERMITTED without written permission:
+
+  - Reproduction of full papers, PDF files, or substantial sections
+    (beyond a short quotation for legitimate citation purposes)
+  - Redistribution — hosting copies of these papers on other sites,
+    mirrors, archives, or aggregator platforms
+  - Derivative works — translations, condensed versions, rewrites, or
+    adaptations
+  - Commercial republication — inclusion in paid products, training
+    datasets, subscription services, or any paywalled bundle
+  - AI / ML training use — using this content as input to train,
+    fine-tune, or align machine-learning models. This restriction is
+    enforced technically via robots.txt and CDN-level AI-bot blocking
+    on the rendering surface, and legally via this license.
+
+Requests for exceptions: justin@nonsequitur.tech. State the intended use,
+the paper(s) involved, and the audience.
+
+This license is binding regardless of how this repository's contents are
+accessed — browser, git clone, API, mirror, archive, search index,
+crawler, or otherwise.
