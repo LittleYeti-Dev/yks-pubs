@@ -25,13 +25,13 @@ All v1.0-preprint as of 2026-04-28:
 
 | # | Slug | Title | Published | DOI |
 |---|---|---|---|---|
-| P1 | hgc3ae2 | Mitigating Confident Misalignment in Agentic Systems: HGC³AE² Framework | 2026-04-19 | TBD |
-| P2 | epistemic-constraints | Epistemic Constraints and Semantic Compression in NLP | 2026-04-22 | TBD |
-| P3 | edge-ai-doctrine | Ten Critical Considerations for Edge AI | 2026-04-22 | TBD |
-| P4 | agentic-substrate | What an AI System Must Provide Under Governance | 2026-04-25 | TBD |
-| P5 | skipjack-protocol | Agile Scrum, Agentics, and the Skipjack Protocol | 2026-04-25 | TBD |
-| P6 | alistair-prime-in-a-box | Self-Sufficient Cognitive Systems at the Edge | 2026-04-25 | TBD |
-| P7 | operating-model-agentic-teams | Standup, Sprint Planning, Context Discipline (non-human dev team) | 2026-04-25 | TBD |
+| P1 | hgc3ae2 | Mitigating Confident Misalignment in Agentic Systems: HGC³AE² Framework | 2026-04-19 | [10.5281/zenodo.19869285](https://doi.org/10.5281/zenodo.19869285) |
+| P2 | epistemic-constraints | Epistemic Constraints and Semantic Compression in NLP | 2026-04-22 | [10.5281/zenodo.19869287](https://doi.org/10.5281/zenodo.19869287) |
+| P3 | edge-ai-doctrine | Ten Critical Considerations for Edge AI | 2026-04-22 | [10.5281/zenodo.19869289](https://doi.org/10.5281/zenodo.19869289) |
+| P4 | agentic-substrate | What an AI System Must Provide Under Governance | 2026-04-25 | [10.5281/zenodo.19869291](https://doi.org/10.5281/zenodo.19869291) |
+| P5 | skipjack-protocol | Agile Scrum, Agentics, and the Skipjack Protocol | 2026-04-25 | [10.5281/zenodo.19869293](https://doi.org/10.5281/zenodo.19869293) |
+| P6 | alistair-prime-in-a-box | Self-Sufficient Cognitive Systems at the Edge | 2026-04-25 | [10.5281/zenodo.19869307](https://doi.org/10.5281/zenodo.19869307) |
+| P7 | operating-model-agentic-teams | Standup, Sprint Planning, Context Discipline (non-human dev team) | 2026-04-25 | [10.5281/zenodo.19869313](https://doi.org/10.5281/zenodo.19869313) |
 
 `TBD` cells populate as Zenodo depositions complete (parent campaign: yks-ops-hub#135).
 
