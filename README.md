@@ -35,6 +35,17 @@ All v1.0-preprint as of 2026-04-28:
 
 `TBD` cells populate as Zenodo depositions complete (parent campaign: yks-ops-hub#135).
 
+## *The Implications of Edge Degraded Ops* — v0.1-seed (P1, P2)
+
+A separate 11-paper undecalogy on distributed state at the C5ISR edge. v0.1-seed deposits timestamp the IP claim while the full papers continue in R&E.
+
+| # | Slug | Title | Published | DOI |
+|---|---|---|---|---|
+| P1 | tactical-substrate | The Tactical Substrate | 2026-05-01 | TBD |
+| P2 | hgc3ae2-at-the-degraded-edge | HGC³AE² at the Degraded Edge | 2026-05-01 | TBD |
+
+P3–P11 in R&E pipeline on `yks-spine-binder` (issues #325–#333).
+
 ## Forthcoming
 
 The decalogy continues with the capstone arc:
