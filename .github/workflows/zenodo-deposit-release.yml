@@ -1,0 +1,201 @@
+name: zenodo-deposit — fire GitHub Release for new PDF drops
+
+# Triggers a GitHub Release per newly committed paper PDF. The release is the
+# Zenodo auto-mint trigger (Zenodo-GitHub integration deposits a DOI on release
+# creation, per the existing 21-paper precedent). Once Zenodo mints the DOI,
+# the DOI appears in the Release notes; a downstream step (manual or follow-on
+# workflow) back-stamps the DOI into yks-web Hugo frontmatter.
+#
+# Adopted 2026-05-13 per Yeti directive — closes the yks-pubs automation gap
+# surfaced when the 9 Lane-2 PDFs landed without firing the deposit pipeline.
+# L2 reference: yks-ops-hub#207 (forked from Klaus #199 surface #6).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'papers/*.pdf'
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: 'Backfill — release all PDFs in papers/ that lack a matching tag'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+permissions:
+  contents: write     # for gh release create
+  pull-requests: read
+
+concurrency:
+  group: zenodo-deposit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fire-releases:
+    name: Create GitHub Release per new PDF (Zenodo mint trigger)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (depth 2 for diff)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Resolve PDF list to release
+        id: pdfs
+        env:
+          BACKFILL: ${{ inputs.backfill || 'false' }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$BACKFILL" == "true" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            # Backfill mode: every PDF in papers/
+            PDFS=$(ls papers/*.pdf 2>/dev/null | sort)
+            echo "mode: backfill (all PDFs in papers/)"
+          else
+            # Push mode: only PDFs added/modified in this push
+            PDFS=$(git diff --diff-filter=AM --name-only HEAD~1 HEAD -- 'papers/*.pdf' || true)
+            echo "mode: incremental (push diff)"
+          fi
+          echo "$PDFS"
+          # Save list as multiline output
+          {
+            echo "list<<EOF"
+            echo "$PDFS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Release per PDF (idempotent on existing tags)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
+          PDFS: ${{ steps.pdfs.outputs.list }}
+        run: |
+          set -euo pipefail
+          python3 <<'PYEOF'
+          import os, sys, json, base64, subprocess, urllib.request, re
+
+          MESH = os.environ.get('MESH_TOKEN', '')
+          GH = os.environ['GH_TOKEN']
+          PDFS = [p.strip() for p in os.environ.get('PDFS','').splitlines() if p.strip()]
+          if not PDFS:
+              print("[zenodo-deposit] No PDFs to release.")
+              sys.exit(0)
+          print(f"[zenodo-deposit] {len(PDFS)} PDF(s) in scope: {PDFS}")
+
+          def gh_api(url, headers=None, method='GET', data=None, timeout=20):
+              H = headers or {'Authorization': f'Bearer {GH}', 'Accept': 'application/vnd.github+json'}
+              req = urllib.request.Request(url, method=method, data=data, headers=H)
+              try:
+                  with urllib.request.urlopen(req, timeout=timeout) as r:
+                      return r.status, json.load(r) if r.status != 204 else {}
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode('utf-8','replace')[:300]
+
+          def parse_pdf_name(path):
+              # papers/<slug>-v<version>.pdf  →  (slug, version)
+              base = os.path.basename(path).replace('.pdf','')
+              m = re.match(r'^(.+)-v(.+)$', base)
+              if not m:
+                  return None, None
+              return m.group(1), m.group(2)
+
+          def fetch_frontmatter(slug, mesh_token):
+              # Pull title + abstract from yks-web. Requires MESH_TOKEN with yks-web read.
+              if not mesh_token:
+                  return {}
+              url = f"https://api.github.com/repos/LittleYeti-Dev/yks-web/contents/sites/nsq-pub/content/pubs/white-papers/{slug}.md?ref=main"
+              code, d = gh_api(url, headers={'Authorization': f'Bearer {mesh_token}', 'Accept': 'application/vnd.github+json'})
+              if code != 200:
+                  print(f"  [{slug}] frontmatter fetch failed (code {code})")
+                  return {}
+              c = base64.b64decode(d['content']).decode('utf-8','replace')
+              parts = c.split('---', 2)
+              if len(parts) < 2:
+                  return {}
+              fm_text = parts[1]
+              # Extract title (single-line) + abstract (multiline block)
+              title = ''
+              abstract = ''
+              in_abstract = False
+              for line in fm_text.split('\n'):
+                  if line.startswith('title:'):
+                      title = line.split(':',1)[1].strip().strip('"').strip("'")
+                  elif line.startswith('abstract:'):
+                      in_abstract = True
+                      continue
+                  elif in_abstract:
+                      if line.startswith(' ') or line.startswith('\t') or not line.strip():
+                          if line.strip():
+                              abstract += line.strip() + ' '
+                      else:
+                          in_abstract = False
+              return {'title': title, 'abstract': abstract.strip()}
+
+          repo = os.environ.get('GITHUB_REPOSITORY','')
+          owner, repo_name = repo.split('/',1)
+
+          # Get existing tags (idempotency)
+          code, tags = gh_api(f"https://api.github.com/repos/{owner}/{repo_name}/tags?per_page=100")
+          existing_tags = {t['name'] for t in tags} if code == 200 and isinstance(tags, list) else set()
+          print(f"[zenodo-deposit] {len(existing_tags)} existing tags")
+
+          released = 0
+          skipped = 0
+          for pdf_path in PDFS:
+              slug, version = parse_pdf_name(pdf_path)
+              if not slug:
+                  print(f"  [skip] cannot parse: {pdf_path}")
+                  continue
+              tag = f"{slug}-v{version}"
+              if tag in existing_tags:
+                  print(f"  [{tag}] tag exists — skip (idempotent)")
+                  skipped += 1
+                  continue
+
+              # Pull frontmatter for title + abstract
+              meta = fetch_frontmatter(slug, MESH)
+              title = meta.get('title') or slug
+              abstract = meta.get('abstract') or ''
+
+              # Release body
+              body_lines = [
+                  f"## {title}",
+                  "",
+                  f"**Version:** {version}",
+                  f"**Slug:** `{slug}`",
+                  f"**Live page:** https://nonsequitur.tech/pubs/white-papers/{slug}/",
+                  f"**PDF:** [{os.path.basename(pdf_path)}](https://github.com/{owner}/{repo_name}/releases/download/{tag}/{os.path.basename(pdf_path)})",
+                  "",
+              ]
+              if abstract:
+                  body_lines += ["### Abstract", "", abstract, ""]
+              body_lines += [
+                  "---",
+                  "*Released by `zenodo-deposit` workflow. Zenodo DOI auto-mints from this Release via the configured Zenodo-GitHub integration.*",
+              ]
+              body = '\n'.join(body_lines)
+
+              # Use gh CLI for Release create (handles asset upload cleanly)
+              print(f"  [{tag}] creating release...")
+              result = subprocess.run(
+                  ['gh', 'release', 'create', tag, pdf_path,
+                   '--title', f"{title} (v{version})",
+                   '--notes', body],
+                  capture_output=True, text=True
+              )
+              if result.returncode == 0:
+                  print(f"  [{tag}] ✓ {result.stdout.strip()}")
+                  released += 1
+              else:
+                  print(f"  [{tag}] ✗ {result.stderr.strip()[:300]}")
+
+          print(f"\n[zenodo-deposit] SUMMARY: {released} released, {skipped} skipped (already tagged)")
+          PYEOF
