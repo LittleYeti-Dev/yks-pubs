@@ -4,6 +4,42 @@ Canonical PDF artifacts for white papers published under the **Non Sequitur Publ
 
 This repository is the publication endpoint in the YKS pipeline. It holds only published v1.0+ artifacts — never working drafts, R&E state, or narrative source.
 
+
+
+## How publishing fires (the reason this repo exists)
+
+**Drop a PDF → GitHub Release auto-fires → Zenodo mints a DOI.** This repo is the publication endpoint of the YKS pipeline; its sole job is to be the trigger surface for the Zenodo-GitHub integration that has been configured on this repository.
+
+### The chain
+
+1. **PDF lands** in `papers/<slug>-v<version>.pdf` (via PR merge, direct push, or LZ sync from upstream — `yks-spine-binder/works/non-fiction/white-papers/<slug>/release/<version>/<slug>-v<version>.pdf`).
+2. **`zenodo-deposit-release.yml`** workflow fires on the push (or via `workflow_dispatch` for backfill). Creates a GitHub Release tagged `<slug>-v<version>` with the PDF as the release asset and a metadata-rich body pulled from the matching `yks-web` Hugo frontmatter (title, abstract, version, slug, live-page URL).
+3. **Zenodo-GitHub integration** (pre-configured on this repo — that's the *why* of yks-pubs) detects the new Release, ingests the PDF + Release metadata, and mints a DOI (`10.5281/zenodo.<N>`).
+4. **DOI back-stamp** — a downstream step (manual or follow-on workflow) pulls the new DOI and updates the `doi:` + `zenodo_id:` fields on the corresponding `yks-web` Hugo frontmatter. The DOI badge then renders on `nonsequitur.tech/pubs/white-papers/<slug>/`.
+
+### Naming convention
+
+`papers/<slug>-v<version>.pdf` where:
+- `<slug>` matches the Hugo page slug at `yks-web/sites/nsq-pub/content/pubs/white-papers/<slug>.md`
+- `<version>` uses dots for seed releases (`0.1-seed`, `0.1-seed-rev3`) and hyphens for preprints (`1-preprint`, `1.1-preprint`)
+
+The workflow's `parse_pdf_name()` step is the canonical name parser.
+
+### Operational notes
+
+- The workflow is **idempotent** — re-runs do not double-Release. Releases are keyed off git tag; existing tags are skipped.
+- **Backfill mode** — `workflow_dispatch` with `backfill: true` releases every PDF in `papers/` that lacks a matching tag. Use this for catch-up after manual PDF drops.
+- **Cross-repo metadata fetch** requires `MESH_TOKEN` repo secret with `yks-web` read access. Without it, Releases still create but with degraded body content (slug-only, no title/abstract).
+- **The Zenodo-GitHub integration must remain configured** on this repo. If it's removed, DOIs stop minting. Check at: https://zenodo.org/account/settings/github/
+
+### What this repo is NOT for
+
+- Draft manuscripts (those live in `yks-spine-binder`)
+- Hugo source (that's `yks-web`)
+- Architecture / process docs (that's `yks-build` / `yks-ops-hub`)
+
+This repo holds **only the final PDFs of published papers** + the workflow that fires their Zenodo deposits. Nothing else.
+
 ## Where to find each part of a paper
 
 - **Read it on the site:** https://nonsequitur.tech/white-papers/{slug}/
