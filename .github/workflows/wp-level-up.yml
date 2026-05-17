@@ -64,8 +64,7 @@ on:
         description: 'Current published version (e.g., v1-preprint; used by WP Standards gate to locate prior PDF)'
         required: false
         type: string
-        default: 'v1-preprint' 
-        default: ''
+        default: 'v1-preprint'
       target_label:
         description: 'Target version label for the output PDF (e.g. v1-1-preprint, v1-preprint, v2-preprint)'
         required: true
