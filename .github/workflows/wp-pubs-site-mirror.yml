@@ -87,7 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --quiet pyyaml
-          python3 .github/scripts/update-frontmatter.py "yks-web/sites/nsq-pub/content/pubs/white-papers/${SLUG}.md" "${TARGET_LABEL}" "${DOI}" "${SLUG}"
+          python3 yks-pubs/.github/scripts/update-frontmatter.py "yks-web/sites/nsq-pub/content/pubs/white-papers/${SLUG}.md" "${TARGET_LABEL}" "${DOI}" "${SLUG}"
 
       - name: Commit + push yks-web changes (Cloudflare Pages auto-builds on push)
         env:
