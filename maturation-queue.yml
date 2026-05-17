@@ -56,3 +56,26 @@ queue:
 #    title_suffix: ' (v1.2 errata)'
 #    tracker: ''
 #    enabled: true                  # default true; set false to skip without removing
+
+# Framework-uplift example (uncomment to fire a backward-enrichment editorial cycle):
+#
+# wp-framework-uplift fires Edna to compare the named paper against the complete
+# current doctrine, produces a v1.x errata addendum DRAFT in
+# yks-spine-binder/intake/papers/<slug>/, and files Movement 3 future-study
+# candidates as yks-spine-binder issues.
+#
+# This is NOT a canon mint. The DOI bump requires a separate errata-bump
+# transition (operator-fired) per Tier C invariant (canon-state transitions
+# must be operator-authored; persona-bot-authored mints = breach).
+#
+#  - slug: hgc3ae2-at-the-degraded-edge
+#    transition: framework-uplift
+#    current_version: v1-1-preprint    # what's currently on the pubs site
+#    target_label: v1-2-preprint       # what the draft addendum is for
+#    enabled: true
+#
+# After the framework-uplift cycle completes:
+#  1. Operator reviews the DRAFT addendum at yks-spine-binder/intake/papers/<slug>/v1-2-preprint-errata-addendum-DRAFT.md
+#  2. Operator edits as needed (or accepts as-is)
+#  3. Operator fires wp-level-up manually with transition=errata-bump to mint the v1.2 DOI
+#  4. Daily orchestrator picks up the matching pubs-mirror-only entry to publish the new PDF
