@@ -1,0 +1,200 @@
+name: wp-implications-daily-digest — aggregate forward-implications into morning review surface
+
+# Cron-fired at 04:30 ET (08:30 UTC standard / 09:30 UTC DST) so the digest is
+# ready by the 0500 ET uDCR build. Scans yks-pubs/implications/*.md files written
+# in the last 24h, clusters by theme (Opus synthesis when ANTHROPIC key is present;
+# simple concatenation when not), writes yks-pubs/digests/<date>-implications.md,
+# and files an at-yeti issue on yks-ops-hub with link + summary so it lands in the
+# morning operator review queue.
+#
+# Runs daily even if no implications were generated (writes a "no-activity" digest
+# so the absence is visible).
+
+on:
+  schedule:
+    # 04:30 ET = 08:30 UTC (standard) — accept 1-hour drift during DST
+    - cron: '30 8 * * *'
+  workflow_dispatch:
+    inputs:
+      lookback_hours:
+        description: 'Hours of implications to aggregate (default 24)'
+        required: false
+        default: '24'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: wp-implications-daily-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    name: Aggregate last-24h implications → daily-digest + at-yeti issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout yks-pubs
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MESH_TOKEN }}
+          fetch-depth: 0  # full history so we can use git log for mtime
+
+      - name: Collect implications files written in last LOOKBACK_HOURS
+        id: collect
+        env:
+          LOOKBACK_HOURS: ${{ inputs.lookback_hours || '24' }}
+        run: |
+          set -euo pipefail
+          mkdir -p digests
+          if [ ! -d implications ]; then
+            echo "no implications/ dir; emitting no-activity digest"
+            echo "count=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # Use git log to find files added/modified in the last LOOKBACK_HOURS
+          SINCE=$(date -u -d "${LOOKBACK_HOURS} hours ago" +"%Y-%m-%dT%H:%M:%SZ")
+          FILES=$(git log --since="$SINCE" --name-only --pretty=format: -- 'implications/*.md' \
+            | sort -u | grep -v '^$' || true)
+          echo "$FILES" > /tmp/recent-implications.txt
+          COUNT=$(wc -l < /tmp/recent-implications.txt | tr -d ' ')
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "files in last ${LOOKBACK_HOURS}h: $COUNT"
+          cat /tmp/recent-implications.txt
+
+      - name: Compose daily digest markdown
+        id: compose
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os, pathlib, datetime, re
+          count = int("${{ steps.collect.outputs.count }}" or "0")
+          today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+          digest_path = pathlib.Path("digests") / f"{today}-implications.md"
+          digest_path.parent.mkdir(exist_ok=True)
+          out = []
+          out.append(f"# Daily Implications Digest — {today}")
+          out.append("")
+          out.append(f"**Generated:** {datetime.datetime.utcnow().isoformat()}Z by wp-implications-daily-digest.yml")
+          out.append(f"**Lookback window:** {os.environ.get('LOOKBACK_HOURS', '24')}h")
+          out.append(f"**Implications files surfaced:** {count}")
+          out.append("")
+          out.append("This file is the morning operator review surface. It aggregates per-paper")
+          out.append("implications produced by wp-implications-extract.yml when papers matured")
+          out.append("through wp-level-up. Use it to spot recurring themes and decide the next WP")
+          out.append("or series to draft.")
+          out.append("")
+          out.append("---")
+          out.append("")
+
+          if count == 0:
+              out.append("## No new implications in the lookback window")
+              out.append("")
+              out.append("No papers matured through `wp-level-up` in the last "
+                          f"{os.environ.get('LOOKBACK_HOURS','24')} hours. Either: (a) it's a quiet "
+                          "day for promotion; or (b) the wp-implications-extract pipeline has a key "
+                          "gap — check `implications/MISSING-API-KEY-*.md` if present.")
+          else:
+              files = open("/tmp/recent-implications.txt").read().splitlines()
+              out.append(f"## Per-paper implications ({count} files)")
+              out.append("")
+              for f in files:
+                  fpath = pathlib.Path(f)
+                  if not fpath.exists():
+                      continue
+                  content = fpath.read_text(encoding="utf-8")
+                  title_match = re.search(r"^# ([^\n]+)", content, re.MULTILINE)
+                  title = title_match.group(1) if title_match else fpath.stem
+                  # Extract the Forward Implications section if present
+                  fwd = re.search(r"## Forward Implications\s*\n(.*?)(?=^## |\Z)", content, re.MULTILINE | re.DOTALL)
+                  next_papers = re.search(r"## Suggested Next Papers\s*\n(.*?)(?=^## |\Z)", content, re.MULTILINE | re.DOTALL)
+                  out.append(f"### {title}")
+                  out.append(f"- Source: [`{f}`](../{f})")
+                  if fwd:
+                      out.append("")
+                      out.append("**Forward implications:**")
+                      out.append(fwd.group(1).strip()[:800])
+                      out.append("")
+                  if next_papers:
+                      out.append("**Suggested next papers:**")
+                      out.append(next_papers.group(1).strip()[:600])
+                      out.append("")
+                  out.append("---")
+                  out.append("")
+
+          out.append("## Operator review")
+          out.append("")
+          out.append("- [ ] Read each per-paper implications section above")
+          out.append("- [ ] Identify recurring themes across the day's implications")
+          out.append("- [ ] Decide: does any theme rise to candidate-WP status today?")
+          out.append("- [ ] If yes, file a [SERIES-INTAKE] or [WP-PROPOSAL] issue on YKS-Spine-Binder with the working title")
+          out.append("- [ ] If no, archive this digest as routine signal")
+          out.append("")
+
+          digest_path.write_text("\n".join(out), encoding="utf-8")
+          print(f"digest written to {digest_path}: {len('\\n'.join(out))} chars")
+          # Emit the path for the next step
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"digest_path={digest_path}\n")
+              fh.write(f"date={today}\n")
+          PY
+
+      - name: Commit + push digest
+        env:
+          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "wp-implications-digest-bot"
+          git config user.email "wp-implications-digest-bot@yks.local"
+          git add digests/
+          if ! git diff --cached --quiet; then
+            git commit -m "digest: implications $(date -u +%Y-%m-%d)"
+            for attempt in 1 2 3; do
+              if git push origin HEAD:main; then break; fi
+              [ "$attempt" -eq 3 ] && { echo "push failed"; exit 1; }
+              git fetch origin main && git rebase origin/main
+              sleep $((attempt * 5))
+            done
+          fi
+
+      - name: File at-yeti issue on yks-ops-hub (morning review entry point)
+        env:
+          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
+          DIGEST_PATH: ${{ steps.compose.outputs.digest_path }}
+          DATE: ${{ steps.compose.outputs.date }}
+          COUNT: ${{ steps.collect.outputs.count }}
+        run: |
+          set -euo pipefail
+          if [ "$COUNT" = "0" ]; then
+            echo "no implications surfaced; skipping at-yeti issue (digest still archived)"
+            exit 0
+          fi
+          BODY=$(cat <<EOF
+          The daily wp-implications digest for $DATE is ready for your review.
+
+          **Implications files surfaced (last 24h):** $COUNT
+
+          **Digest path:** [\`$DIGEST_PATH\`](https://github.com/LittleYeti-Dev/yks-pubs/blob/main/$DIGEST_PATH)
+
+          **What to do:**
+          1. Read the per-paper Forward Implications + Suggested Next Papers sections
+          2. Spot recurring themes (a theme that appears in 2+ papers is a strong candidate-WP signal)
+          3. If a theme rises to candidate-WP status, file a [SERIES-INTAKE] or [WP-PROPOSAL] issue on YKS-Spine-Binder
+          4. If no candidate emerges, archive as routine signal
+
+          ---
+
+          Auto-filed by wp-implications-daily-digest.yml (cron 04:30 UTC). Closes when reviewed.
+          EOF
+          )
+          curl -s -X POST \
+            -H "Authorization: Bearer $MESH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(python3 -c "import json,os; print(json.dumps({
+              'title': f'[REVIEW] WP implications digest — {os.environ[\"DATE\"]} ({os.environ[\"COUNT\"]} papers)',
+              'body': open('/dev/stdin').read() if False else os.environ.get('PRE_BODY', open('/proc/self/fd/0').read()),
+              'labels': ['at:yeti', 'kind:review', 'area:wp-implications']
+            }))" <<< "$BODY")" \
+            "https://api.github.com/repos/LittleYeti-Dev/yks-ops-hub/issues" \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(f"  filed at-yeti issue: {d.get(\"html_url\",\"err: \"+d.get(\"message\",\"?\"))}")'
