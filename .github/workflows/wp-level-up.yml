@@ -233,8 +233,16 @@ jobs:
           old_title = new_fm.get("title", "Untitled")
           if title_suffix:
               new_fm["title"] = old_title + title_suffix
-          # Derive a version field from target_label (strip leading 'v', replace - with .)
-          version_str = target_label.lstrip("v").replace("-", ".")
+          # Derive a version field from target_label.
+          # target_label format: "v<MAJOR>-<MINOR>-<channel>" (e.g., "v1-2-preprint", "v1-1-preprint")
+          # Want: "<MAJOR>.<MINOR>-<channel>" (e.g., "1.2-preprint")
+          # ONLY replace dashes in the MAJOR-MINOR portion, not the trailing -<channel> suffix.
+          _parts = target_label.lstrip("v").split("-")
+          if len(_parts) >= 3:
+              # join all but last by ".", then add "-<channel>"
+              version_str = ".".join(_parts[:-1]) + "-" + _parts[-1]
+          else:
+              version_str = target_label.lstrip("v").replace("-", ".")
           new_fm["version"] = version_str
           # Drop prior DOI; the new Zenodo deposit gets its own
           new_fm.pop("doi", None)
