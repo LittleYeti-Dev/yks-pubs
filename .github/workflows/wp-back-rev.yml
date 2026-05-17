@@ -1,0 +1,243 @@
+name: wp-back-rev — roll a paper back to a prior version on the pubs site
+
+# Operator-fired rollback. Does NOT touch yks-pubs/papers/ (PDFs immutable; Zenodo DOIs preserved).
+# Flips yks-web Hugo frontmatter to a target prior version. Cloudflare Pages auto-rebuilds.
+#
+# Use cases:
+#   - Discover a defect in a freshly-shipped vN, want vN-1 to be the canonical pubs-site download
+#   - Withdraw a v1.x that shouldn't have shipped (the PDF stays in static/ as history; frontmatter
+#     selects which version is current)
+#
+# Per ADDITIVE-DOCTRINE: this workflow does NOT delete or modify any PDFs. PDFs are preserved
+# as historical artifacts; the frontmatter is the canonical selector.
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Paper slug (e.g., hgc3ae2-at-the-degraded-edge)'
+        required: true
+        type: string
+      from_version:
+        description: 'Version currently on the site (e.g., v1-2-preprint)'
+        required: true
+        type: string
+      to_version:
+        description: 'Version to roll back to (e.g., v1-1-preprint)'
+        required: true
+        type: string
+      reason:
+        description: 'Short reason for the roll-back (audit trail)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: wp-back-rev-${{ inputs.slug }}
+  cancel-in-progress: false
+
+jobs:
+  back-rev:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Telegram ping — start
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLUG: ${{ inputs.slug }}
+          FROM: ${{ inputs.from_version }}
+          TO: ${{ inputs.to_version }}
+          REASON: ${{ inputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then exit 0; fi
+          MSG="wp-back-rev START: $SLUG roll $FROM -> $TO. Reason: $REASON. Run: $RUN_URL"
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" -o /dev/null
+
+      - name: Checkout yks-web
+        uses: actions/checkout@v4
+        with:
+          repository: LittleYeti-Dev/yks-web
+          token: ${{ secrets.MESH_TOKEN }}
+
+      - name: Verify target PDF exists in static/papers/
+        env:
+          SLUG: ${{ inputs.slug }}
+          TO: ${{ inputs.to_version }}
+        run: |
+          set -euo pipefail
+          PDF="sites/nsq-pub/static/papers/${SLUG}-${TO}.pdf"
+          if [ ! -f "$PDF" ]; then
+            echo "FATAL: target PDF not found at $PDF — cannot back-rev to a version that was never mirrored"
+            exit 1
+          fi
+          echo "target PDF present: $PDF ($(stat -c%s $PDF) bytes)"
+
+      - name: Update Hugo frontmatter to flip canonical version
+        env:
+          SLUG: ${{ inputs.slug }}
+          FROM: ${{ inputs.from_version }}
+          TO: ${{ inputs.to_version }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          pip install pyyaml --quiet
+          python3 <<'PY'
+          import os, re, yaml, pathlib
+          slug = os.environ["SLUG"]
+          frm = os.environ["FROM"]
+          to = os.environ["TO"]
+          reason = os.environ["REASON"]
+          md_path = pathlib.Path(f"sites/nsq-pub/content/pubs/white-papers/{slug}.md")
+          text = md_path.read_text(encoding="utf-8")
+          m = re.match(r"---\s*\n(.*?)\n---\s*\n(.*)", text, re.DOTALL)
+          if not m:
+              raise SystemExit(f"FATAL: no frontmatter in {md_path}")
+          fm = yaml.safe_load(m.group(1)) or {}
+          body = m.group(2)
+          # Verify current state
+          current_version = fm.get("version", "")
+          current_pdf = fm.get("pdf", "")
+          expected_pdf = f"/papers/{slug}-{frm}.pdf"
+          if current_pdf != expected_pdf:
+              raise SystemExit(f"FATAL: from_version mismatch — frontmatter says pdf={current_pdf}, expected {expected_pdf}")
+          # Capture the back-rev'd version into prior_versions[]
+          prior = fm.get("prior_versions", []) or []
+          rolled_entry = {
+              "version": current_version,
+              "doi": fm.get("doi", "WITHDRAWN-AS-OF-BACK-REV"),
+              "pdf": current_pdf,
+              "published_date": fm.get("published_date", ""),
+              "back_rev_reason": reason,
+              "back_rev_date": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d"),
+          }
+          # Don't duplicate
+          if not any(e.get("version") == current_version and e.get("back_rev_reason") for e in prior):
+              prior.insert(0, rolled_entry)
+          fm["prior_versions"] = prior
+
+          # Flip to the back-rev target — preserve target's prior_versions entry if it exists
+          target_entry = next((e for e in prior if e.get("version") and to in e.get("pdf","")), None)
+          if target_entry:
+              # Restore canonical fields from the prior entry
+              fm["version"] = target_entry.get("version", to.lstrip("v").replace("-", "."))
+              fm["doi"] = target_entry.get("doi", "PENDING-ZENODO-MINT")
+              fm["pdf"] = target_entry["pdf"]
+              fm["pdf_sha256"] = target_entry.get("pdf_sha256", "")
+              fm["published_date"] = target_entry.get("published_date", fm.get("published_date",""))
+          else:
+              # Construct fields from target version label
+              fm["version"] = to.lstrip("v").replace("-", ".")
+              fm["pdf"] = f"/papers/{slug}-{to}.pdf"
+              fm.pop("doi", None)
+              fm.pop("pdf_sha256", None)
+
+          # Audit trail in frontmatter
+          fm["back_rev_log"] = (fm.get("back_rev_log") or []) + [{
+              "from": frm,
+              "to": to,
+              "reason": reason,
+              "date": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d"),
+          }]
+
+          # Write back
+          new_text = "---\n" + yaml.safe_dump(fm, allow_unicode=True, sort_keys=False) + "---\n" + body
+          md_path.write_text(new_text, encoding="utf-8")
+          print(f"flipped {slug}: version={fm['version']} pdf={fm['pdf']}")
+          PY
+
+      - name: Commit + push yks-web changes
+        env:
+          SLUG: ${{ inputs.slug }}
+          FROM: ${{ inputs.from_version }}
+          TO: ${{ inputs.to_version }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          git config user.name "wp-back-rev-bot"
+          git config user.email "wp-back-rev-bot@yks.local"
+          git add "sites/nsq-pub/content/pubs/white-papers/${SLUG}.md"
+          if git diff --cached --quiet; then
+            echo "no frontmatter changes — perhaps already on $TO"
+            exit 0
+          fi
+          git commit -m "back-rev: ${SLUG} ${FROM} -> ${TO} (${REASON})"
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then break; fi
+            [ "$attempt" -eq 3 ] && exit 1
+            git fetch origin main && git rebase origin/main
+            sleep $((attempt * 5))
+          done
+
+      - name: File audit-trail issue on yks-ops-hub
+        env:
+          GH_TOKEN: ${{ secrets.MESH_TOKEN }}
+          SLUG: ${{ inputs.slug }}
+          FROM: ${{ inputs.from_version }}
+          TO: ${{ inputs.to_version }}
+          REASON: ${{ inputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 -c "
+          import json
+          print(json.dumps({
+            'title': f'back-rev: $SLUG ${FROM} -> ${TO}',
+            'body': f'**Operator-fired back-rev**\n\n- Slug: \`$SLUG\`\n- From: \`$FROM\`\n- To: \`$TO\`\n- Reason: $REASON\n- Workflow run: $RUN_URL\n\nPDFs preserved at static/papers/; Zenodo DOIs preserved. Frontmatter flipped to make $TO canonical on the pubs site. Cloudflare Pages auto-rebuilds.',
+            'labels': ['kind:back-rev', 'domain:pubs']
+          }))
+          " > /tmp/issue.json
+          HTTP=$(curl -s -o /tmp/issue-resp.json -w "%{http_code}" \
+            -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" \
+            --data-binary @/tmp/issue.json "https://api.github.com/repos/LittleYeti-Dev/yks-ops-hub/issues")
+          echo "audit issue HTTP $HTTP"
+
+      - name: Verify back-rev landed on pubs site (poll up to 4 min)
+        env:
+          SLUG: ${{ inputs.slug }}
+          TO: ${{ inputs.to_version }}
+        run: |
+          set -euo pipefail
+          URL="https://nonsequitur.tech/papers/${SLUG}-${TO}.pdf"
+          for attempt in 1 2 3 4 5 6 7 8; do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -I "$URL")
+            if [ "$CODE" = "200" ]; then
+              echo "back-rev verified live on attempt $attempt: $URL"
+              break
+            fi
+            [ "$attempt" -eq 8 ] && { echo "TIMEOUT: $URL not 200 after 4 min"; exit 1; }
+            sleep 30
+          done
+
+      - name: Telegram ping — done
+        if: ${{ success() }}
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLUG: ${{ inputs.slug }}
+          FROM: ${{ inputs.from_version }}
+          TO: ${{ inputs.to_version }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then exit 0; fi
+          MSG="DONE wp-back-rev: $SLUG is now on $TO (was $FROM). Reason: $REASON. PDFs preserved as historical artifacts; Zenodo DOIs preserved."
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" -o /dev/null
+
+      - name: Telegram ping — failed
+        if: ${{ failure() }}
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLUG: ${{ inputs.slug }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then exit 0; fi
+          MSG="FAILED wp-back-rev: $SLUG. Inspect: $RUN_URL"
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" -o /dev/null
