@@ -1,23 +1,8 @@
-name: wp-pubs-site-mirror — make a matured PDF reader-visible on nonsequitur.tech/pubs/
+name: wp-pubs-site-mirror — make a matured PDF reader-visible on the pubs site
 
-# Closes the loop on the reader-facing side. wp-level-up.yml pushes the new PDF
-# to yks-pubs/papers/ (Zenodo archival + DOI mint). This workflow then mirrors
-# the PDF into yks-web/sites/nsq-pub/static/papers/ (Hugo static), updates the
-# paper's Hugo frontmatter at yks-web/sites/nsq-pub/content/pubs/white-papers/
-# <slug>.md to point at the new version, and verifies the resulting URL is
-# live on nonsequitur.tech.
-#
-# Telegram bookends:
-#   - Start ping on workflow_dispatch fire
-#   - Done ping with summary + verification result
-#
-# Required secrets in yks-pubs:
-#   MESH_TOKEN              — cross-repo push to yks-web
-#   TELEGRAM_BOT_TOKEN      — Telegram Bot API (Remac bot token works)
-#   TELEGRAM_CHAT_ID        — Yeti's chat id (8681991453 per memory)
-#
-# If Telegram secrets missing, the workflow runs without notifications (still
-# does the mirror + frontmatter update + pubs-site verification).
+# Mirrors yks-pubs/papers/<slug>-<target>.pdf into yks-web/sites/nsq-pub/static/papers/,
+# updates the paper's Hugo frontmatter, waits for the Cloudflare Pages build,
+# HEAD-verifies the URL is live on nonsequitur.tech, and pings Telegram with the result.
 
 on:
   workflow_dispatch:
@@ -25,23 +10,16 @@ on:
       slug:
         description: 'Paper slug (e.g. hgc3ae2-at-the-degraded-edge)'
         required: true
+        type: string
       target_label:
         description: 'Version label (e.g. v1-1-preprint, v1-preprint, v2-preprint)'
         required: true
+        type: string
       doi:
-        description: 'Zenodo DOI for this version (e.g. 10.5281/zenodo.NNNNN). If "auto", workflow polls Zenodo for the latest mint on this slug+version.'
+        description: 'Zenodo DOI for this version (e.g. 10.5281/zenodo.NNNNN). Use "pending" if Zenodo mint not yet visible.'
         required: false
-        default: 'auto'
-      keep_prior_pdf:
-        description: 'Preserve prior PDF in static/papers/ (true) or remove (false, default keeps)'
-        required: false
-        type: boolean
-        default: true
-  # Optionally auto-fire after wp-level-up completes — operator can flip on later
-  # by uncommenting. For now, manual to keep the cross-repo writes explicit.
-  # workflow_run:
-  #   workflows: ['wp-level-up — mature a paper to its next level (Zenodo DOI auto-mints downstream)']
-  #   types: [completed]
+        type: string
+        default: 'pending'
 
 permissions:
   contents: write
@@ -52,11 +30,11 @@ concurrency:
 
 jobs:
   mirror-and-verify:
-    name: ${{ inputs.slug }} -> ${{ inputs.target_label }} (pubs site mirror + verify)
+    name: mirror ${{ inputs.slug }} ${{ inputs.target_label }} to pubs site
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
-      - name: Telegram ping — START
+      - name: Telegram ping — start
         env:
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -65,20 +43,15 @@ jobs:
           DOI: ${{ inputs.doi }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -euo pipefail
-          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT:-}" ]; then
-            echo "Telegram secrets not set — skipping start ping"
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+            echo "Telegram secrets not set; skipping start ping"
             exit 0
           fi
-          MSG="🚀 wp-pubs-site-mirror started
-          slug: ${SLUG}
-          target: ${TARGET_LABEL}
-          doi: ${DOI}
-          run: ${RUN_URL}"
+          MSG="wp-pubs-site-mirror started: $SLUG $TARGET_LABEL (doi=$DOI). Run: $RUN_URL"
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT}" \
             --data-urlencode "text=${MSG}" \
-            -o /dev/null -w "  telegram start ping: HTTP %{http_code}\n"
+            -o /dev/null -w "start ping HTTP %{http_code}\n"
 
       - name: Checkout yks-pubs (source of new PDF)
         uses: actions/checkout@v4
@@ -87,69 +60,14 @@ jobs:
           token: ${{ secrets.MESH_TOKEN }}
           path: yks-pubs
 
-      - name: Checkout yks-web (target for static PDF mirror + frontmatter update)
+      - name: Checkout yks-web (target for mirror + frontmatter update)
         uses: actions/checkout@v4
         with:
           repository: LittleYeti-Dev/yks-web
           token: ${{ secrets.MESH_TOKEN }}
           path: yks-web
 
-      - name: Verify source PDF exists in yks-pubs/papers/
-        env:
-          SLUG: ${{ inputs.slug }}
-          TARGET_LABEL: ${{ inputs.target_label }}
-        run: |
-          set -euo pipefail
-          SRC="yks-pubs/papers/${SLUG}-${TARGET_LABEL}.pdf"
-          test -f "$SRC" || { echo "FATAL: source PDF not at $SRC"; exit 1; }
-          echo "source PDF: $SRC  size: $(stat -c%s $SRC) bytes"
-
-      - name: Resolve Zenodo DOI (poll if "auto")
-        id: doi
-        env:
-          SLUG: ${{ inputs.slug }}
-          TARGET_LABEL: ${{ inputs.target_label }}
-          INPUT_DOI: ${{ inputs.doi }}
-        run: |
-          set -euo pipefail
-          if [ "$INPUT_DOI" != "auto" ]; then
-            echo "doi=$INPUT_DOI" >> $GITHUB_OUTPUT
-            echo "Using operator-supplied DOI: $INPUT_DOI"
-            exit 0
-          fi
-          # Poll Zenodo for a record matching this slug + target_label.
-          # Zenodo mints async after GitHub Release creation; usually 1-5 min, occasionally longer.
-          # Search by title containing the slug + "v1.1" / "v1-1" markers.
-          VERSION_HINT=$(echo "$TARGET_LABEL" | sed 's/-/./g' | sed 's/^v//')   # e.g. v1-1-preprint → 1.1.preprint
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            curl -s "https://zenodo.org/api/records?q=publisher:%22Non+Sequitur+Publishing%22+AND+%22${SLUG}%22&size=5&sort=mostrecent" \
-              -o /tmp/zen.json
-            DOI=$(python3 -c '
-          import json, sys
-          d = json.load(open("/tmp/zen.json"))
-          hits = d.get("hits", {}).get("hits", [])
-          slug = "'"$SLUG"'"
-          # Pick the most recent matching record
-          for h in hits:
-              md = h.get("metadata", {})
-              if slug in (md.get("title","").lower()):
-                  print(h.get("doi",""))
-                  break
-          ')
-            if [ -n "$DOI" ]; then
-              echo "doi=$DOI" >> $GITHUB_OUTPUT
-              echo "Zenodo DOI resolved on attempt $attempt: $DOI"
-              break
-            fi
-            echo "attempt $attempt: Zenodo DOI not minted yet; sleeping 30s"
-            sleep 30
-          done
-          if [ -z "$DOI" ]; then
-            echo "doi=PENDING" >> $GITHUB_OUTPUT
-            echo "WARNING: Zenodo DOI not minted after 5 min; using placeholder 'PENDING'. Operator can re-fire later with explicit doi=… input to back-stamp."
-          fi
-
-      - name: Mirror PDF into yks-web/sites/nsq-pub/static/papers/
+      - name: Verify source PDF exists and copy into yks-web static papers dir
         env:
           SLUG: ${{ inputs.slug }}
           TARGET_LABEL: ${{ inputs.target_label }}
@@ -157,76 +75,25 @@ jobs:
           set -euo pipefail
           SRC="yks-pubs/papers/${SLUG}-${TARGET_LABEL}.pdf"
           DST="yks-web/sites/nsq-pub/static/papers/${SLUG}-${TARGET_LABEL}.pdf"
+          test -f "$SRC" || { echo "FATAL: source not at $SRC"; exit 1; }
           cp "$SRC" "$DST"
-          echo "mirrored: $DST  size: $(stat -c%s $DST) bytes"
+          echo "mirrored $(stat -c%s $DST) bytes -> $DST"
 
-      - name: Update Hugo frontmatter to point at new version + add prior_versions trail
+      - name: Update Hugo frontmatter (version, doi, pdf path; preserve prior versions)
         env:
           SLUG: ${{ inputs.slug }}
           TARGET_LABEL: ${{ inputs.target_label }}
-          DOI: ${{ steps.doi.outputs.doi }}
+          DOI: ${{ inputs.doi }}
         run: |
           set -euo pipefail
-          FM_PATH="yks-web/sites/nsq-pub/content/pubs/white-papers/${SLUG}.md"
-          test -f "$FM_PATH" || { echo "FATAL: frontmatter not at $FM_PATH"; exit 1; }
           python3 -m pip install --quiet pyyaml
+          python3 .github/scripts/update-frontmatter.py "yks-web/sites/nsq-pub/content/pubs/white-papers/${SLUG}.md" "${TARGET_LABEL}" "${DOI}" "${SLUG}"
 
-          python3 <<'PY'
-          import os, re, pathlib, yaml
-          slug = os.environ["SLUG"]
-          target = os.environ["TARGET_LABEL"]
-          doi = os.environ["DOI"]
-          fm_path = pathlib.Path(os.environ.get("FM_PATH","") or f"yks-web/sites/nsq-pub/content/pubs/white-papers/{slug}.md")
-
-          text = fm_path.read_text(encoding="utf-8")
-          m = re.match(r"---\s*\n(.*?)\n---\s*\n(.*)", text, re.DOTALL)
-          if not m:
-              raise SystemExit(f"FATAL: no frontmatter in {fm_path}")
-          fm = yaml.safe_load(m.group(1)) or {}
-          body = m.group(2)
-
-          # Preserve current version as prior_version
-          prior_versions = list(fm.get("prior_versions") or [])
-          prior_versions.insert(0, {
-              "version": fm.get("version", ""),
-              "doi": fm.get("doi", ""),
-              "pdf": fm.get("pdf", ""),
-              "published_date": fm.get("published_date") or fm.get("date", ""),
-          })
-
-          # Compute new version string from target_label (e.g., v1-1-preprint → "1.1-preprint")
-          new_version = re.sub(r"^v", "", target).replace("-", ".", 1).replace("-", ".", 1)
-          # Keep "preprint" suffix as-is; "1.1.preprint" → normalize to "1.1-preprint"
-          # Heuristic: if there's a known label suffix, restore the hyphen
-          for suffix in ("preprint", "seed", "peer-reviewed"):
-              dotted = "." + suffix
-              if dotted in new_version:
-                  new_version = new_version.replace(dotted, "-" + suffix)
-                  break
-
-          fm["version"] = new_version
-          if doi and doi != "PENDING":
-              fm["doi"] = doi
-              fm["zenodo_id"] = doi.rsplit("/", 1)[-1]
-          else:
-              # leave doi field as "pending" for manual back-stamp
-              fm["doi"] = "PENDING-ZENODO-MINT"
-              fm["zenodo_id"] = ""
-          fm["pdf"] = f"/papers/{slug}-{target}.pdf"
-          fm["prior_versions"] = prior_versions
-
-          # Re-emit frontmatter
-          out = "---\n" + yaml.safe_dump(fm, allow_unicode=True, sort_keys=False, default_flow_style=False) + "---\n" + body
-          fm_path.write_text(out, encoding="utf-8")
-          print(f"frontmatter updated: version={new_version} doi={fm['doi']} pdf={fm['pdf']} prior_versions_count={len(prior_versions)}")
-          PY
-
-      - name: Commit + push yks-web changes (CF Pages auto-builds on push)
+      - name: Commit + push yks-web changes (Cloudflare Pages auto-builds on push)
         env:
-          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
           SLUG: ${{ inputs.slug }}
           TARGET_LABEL: ${{ inputs.target_label }}
-          DOI: ${{ steps.doi.outputs.doi }}
+          DOI: ${{ inputs.doi }}
         run: |
           set -euo pipefail
           cd yks-web
@@ -234,16 +101,22 @@ jobs:
           git config user.email "wp-pubs-mirror-bot@yks.local"
           git add "sites/nsq-pub/static/papers/${SLUG}-${TARGET_LABEL}.pdf"
           git add "sites/nsq-pub/content/pubs/white-papers/${SLUG}.md"
-          MSG="pubs: ${SLUG} ${TARGET_LABEL} — mirror PDF + frontmatter (doi=${DOI})"
-          git commit -m "$MSG"
+          if git diff --cached --quiet; then
+            echo "no changes to commit (already mirrored?)"
+            exit 0
+          fi
+          git commit -m "pubs: ${SLUG} ${TARGET_LABEL} mirror + frontmatter (doi=${DOI})"
           for attempt in 1 2 3; do
-            if git push origin HEAD:main; then echo "push succeeded on attempt $attempt"; break; fi
-            [ "$attempt" -eq 3 ] && { echo "push failed"; exit 1; }
+            if git push origin HEAD:main; then
+              echo "push succeeded on attempt $attempt"
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then echo "push failed"; exit 1; fi
             git fetch origin main && git rebase origin/main
             sleep $((attempt * 5))
           done
 
-      - name: Wait for CF Pages build + verify pubs site URL is live
+      - name: Verify the PDF is live on nonsequitur.tech (poll up to 6 min)
         id: verify
         env:
           SLUG: ${{ inputs.slug }}
@@ -252,58 +125,47 @@ jobs:
           set -euo pipefail
           PDF_URL="https://nonsequitur.tech/papers/${SLUG}-${TARGET_LABEL}.pdf"
           PAGE_URL="https://nonsequitur.tech/pubs/white-papers/${SLUG}/"
-          echo "polling $PDF_URL …"
+          echo "polling $PDF_URL"
+          REACHABLE=false
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             CODE=$(curl -s -o /dev/null -w "%{http_code}" -I "$PDF_URL")
             if [ "$CODE" = "200" ]; then
-              echo "pubs-site PDF reachable on attempt $attempt: $PDF_URL"
-              SIZE=$(curl -sI "$PDF_URL" | awk -F': ' '/^[Cc]ontent-[Ll]ength:/ {gsub(/[\r\n]/,""); print $2}')
-              echo "pdf_url=$PDF_URL" >> $GITHUB_OUTPUT
-              echo "page_url=$PAGE_URL" >> $GITHUB_OUTPUT
-              echo "pdf_size=$SIZE" >> $GITHUB_OUTPUT
-              echo "reachable=true" >> $GITHUB_OUTPUT
-              exit 0
+              REACHABLE=true
+              echo "pubs PDF reachable on attempt $attempt"
+              break
             fi
-            echo "attempt $attempt: HTTP $CODE; sleeping 30s (CF Pages build typically 1-3 min)"
+            echo "attempt $attempt: HTTP $CODE; sleeping 30s"
             sleep 30
           done
-          echo "TIMEOUT: pubs site not reachable after 6 min"
           echo "pdf_url=$PDF_URL" >> $GITHUB_OUTPUT
           echo "page_url=$PAGE_URL" >> $GITHUB_OUTPUT
-          echo "reachable=false" >> $GITHUB_OUTPUT
-          exit 1
+          echo "reachable=$REACHABLE" >> $GITHUB_OUTPUT
+          if [ "$REACHABLE" != "true" ]; then
+            echo "TIMEOUT: pubs PDF not reachable after 6 min"
+            exit 1
+          fi
 
-      - name: Telegram ping — DONE (success)
+      - name: Telegram ping — done (success)
         if: ${{ success() }}
         env:
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
           SLUG: ${{ inputs.slug }}
           TARGET_LABEL: ${{ inputs.target_label }}
-          DOI: ${{ steps.doi.outputs.doi }}
+          DOI: ${{ inputs.doi }}
           PDF_URL: ${{ steps.verify.outputs.pdf_url }}
           PAGE_URL: ${{ steps.verify.outputs.page_url }}
-          PDF_SIZE: ${{ steps.verify.outputs.pdf_size }}
         run: |
-          set -euo pipefail
-          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT:-}" ]; then
-            echo "Telegram secrets not set; skipping done ping"
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
             exit 0
           fi
-          MSG="✅ ${SLUG} ${TARGET_LABEL} now live on pubs site
-
-          📄 PDF: ${PDF_URL}
-          📦 Size: ${PDF_SIZE} bytes
-          🔗 Page: ${PAGE_URL}
-          🆔 DOI: ${DOI}
-
-          Ready to view. Refresh the page if it's cached."
+          MSG="DONE: ${SLUG} ${TARGET_LABEL} is live on the pubs site. PDF: ${PDF_URL}  Page: ${PAGE_URL}  DOI: ${DOI}"
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT}" \
             --data-urlencode "text=${MSG}" \
-            -o /dev/null -w "  telegram done ping: HTTP %{http_code}\n"
+            -o /dev/null -w "done ping HTTP %{http_code}\n"
 
-      - name: Telegram ping — FAILED
+      - name: Telegram ping — failed
         if: ${{ failure() }}
         env:
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -312,13 +174,10 @@ jobs:
           TARGET_LABEL: ${{ inputs.target_label }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -euo pipefail
-          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT:-}" ]; then
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
             exit 0
           fi
-          MSG="❌ wp-pubs-site-mirror FAILED: ${SLUG} ${TARGET_LABEL}
-
-          Inspect: ${RUN_URL}"
+          MSG="FAILED: wp-pubs-site-mirror for ${SLUG} ${TARGET_LABEL}. Inspect: ${RUN_URL}"
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT}" \
             --data-urlencode "text=${MSG}" \
