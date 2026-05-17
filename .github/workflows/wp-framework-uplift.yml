@@ -257,57 +257,13 @@ jobs:
           SLUG: ${{ inputs.slug }}
         run: |
           set -euo pipefail
-          ISSUE_URLS=""
-          ISSUE_COUNT=0
-          while IFS= read -r line; do
-            TITLE=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d['title'][:80])")
-            BODY=$(echo "$line" | python3 -c "
-import json,sys
-d=json.loads(sys.stdin.read())
-print(f'**Filed by:** wp-framework-uplift (autonomous Movement 3 extraction from \`{__import__(\"os\").environ[\"SLUG\"]}\` backward-enrichment review)')
-print(f'**Type:** future-study candidate')
-print()
-print(f'## Working title')
-print(f'{d[\"title\"]}')
-print()
-print(f'## Gap closed')
-print(f'{d[\"gap_closed\"]}')
-print()
-print(f'## Series fit')
-print(f'{d[\"series_fit\"]}')
-print()
-print(f'## Rationale')
-print(f'{d[\"rationale\"]}')
-print()
-print(f'## Provenance')
-print(f'- Source: framework-uplift cycle for `{__import__(\"os\").environ[\"SLUG\"]}`')
-print(f'- Extracted from: Edna Movement 3 future-study analysis')
-print(f'- Operator review required before drafting authorization')
-")
-            python3 -c "
-import json
-print(json.dumps({
-  'title': 'wp:signal — '+'''$TITLE''',
-  'body': '''$BODY''',
-  'labels': ['kind:wp-signal', 'source:framework-uplift', 'paper:${SLUG}']
-}))" > /tmp/issue-payload.json
-            HTTP=$(curl -s -o /tmp/issue-resp.json -w "%{http_code}" \
-              -X POST -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              -H "Content-Type: application/json" \
-              --data-binary @/tmp/issue-payload.json \
-              "https://api.github.com/repos/LittleYeti-Dev/yks-spine-binder/issues")
-            if [ "$HTTP" = "201" ]; then
-              ISSUE_NUM=$(python3 -c "import json; print(json.load(open('/tmp/issue-resp.json')).get('number','?'))")
-              ISSUE_URLS="$ISSUE_URLS yks-spine-binder#${ISSUE_NUM}"
-              ISSUE_COUNT=$((ISSUE_COUNT+1))
-            else
-              echo "WARN: failed to file issue (HTTP $HTTP): $TITLE"
-            fi
-          done < <(python3 -c "import json; [print(json.dumps(c)) for c in json.load(open('/tmp/parsed/movement-3-candidates.json'))]")
+          ISSUE_REFS=$(python3 yks-pubs/.github/scripts/file-m3-issues.py \
+            --candidates-json /tmp/parsed/movement-3-candidates.json \
+            --slug "$SLUG")
+          ISSUE_COUNT=$(echo "$ISSUE_REFS" | tr ',' '\n' | grep -c "#" || echo 0)
           echo "count=$ISSUE_COUNT" >> $GITHUB_OUTPUT
-          echo "urls=$ISSUE_URLS" >> $GITHUB_OUTPUT
-          echo "filed $ISSUE_COUNT future-study issues"
+          echo "urls=$ISSUE_REFS" >> $GITHUB_OUTPUT
+          echo "filed $ISSUE_COUNT future-study issues: $ISSUE_REFS"
 
       - name: Telegram ping — done (operator handoff)
         if: ${{ success() }}
