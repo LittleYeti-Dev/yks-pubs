@@ -1,0 +1,250 @@
+name: wp-implications-extract — Opus synthesis of next-implications per matured paper
+
+# Fires after wp-level-up.yml completes successfully. For the just-matured paper,
+# invokes Claude Opus with:
+#   1. The new paper's source markdown (or the freshly-pushed PDF's source)
+#   2. The current framework-state.md (auto-refreshed by wp-framework-rollup.yml)
+#   3. A persona prompt asking: "What does this paper imply for the next WP or series?
+#      What gaps does it expose? What's the next paper this points at?"
+#
+# Output: yks-pubs/implications/<slug>-<target_label>-implications.md
+# This file is the unit-of-work that wp-implications-daily-digest.yml aggregates
+# each morning for operator review.
+#
+# Requires: ANTHROPIC_API_KEY (or CLIVE_ANTHROP_KEY) in yks-pubs secrets. If not
+# present, the workflow surfaces an INCOMPLETE notice and exits cleanly so the
+# pipeline doesn't block downstream wp-level-up runs.
+
+on:
+  workflow_run:
+    workflows: ['wp-level-up — mature a paper to its next level (Zenodo DOI auto-mints downstream)']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Paper slug (manual mode)'
+        required: true
+      target_label:
+        description: 'Target version label (e.g. v1-1-preprint)'
+        required: true
+      source_repo:
+        description: 'Source markdown repo'
+        required: true
+        default: 'YKS-Spine-Binder'
+      source_path:
+        description: 'Source markdown path in source_repo'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wp-implications-extract
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    name: Synthesize next-implications for ${{ github.event.inputs.slug || 'auto-detected' }}
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout yks-pubs (MESH_TOKEN for push)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MESH_TOKEN }}
+
+      - name: Verify ANTHROPIC key present (skip-with-notice if absent)
+        id: keycheck
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLIVE_KEY: ${{ secrets.CLIVE_ANTHROP_KEY }}
+        run: |
+          set -euo pipefail
+          KEY="${CLIVE_KEY:-${ANTHROPIC_API_KEY:-}}"
+          if [ -z "$KEY" ]; then
+            echo "has_key=false" >> $GITHUB_OUTPUT
+            mkdir -p implications
+            DATE=$(date -u +%Y-%m-%d)
+            cat > "implications/MISSING-API-KEY-${DATE}.md" <<EOF
+          # wp-implications-extract — SKIPPED (missing ANTHROPIC key)
+
+          **Reason:** neither \`secrets.CLIVE_ANTHROP_KEY\` nor \`secrets.ANTHROPIC_API_KEY\` is set in yks-pubs repo secrets.
+
+          To enable:
+          \`\`\`bash
+          gh secret set CLIVE_ANTHROP_KEY -b'<api-key>' -R LittleYeti-Dev/yks-pubs
+          # OR
+          gh secret set ANTHROPIC_API_KEY -b'<api-key>' -R LittleYeti-Dev/yks-pubs
+          \`\`\`
+
+          Once set, the next wp-level-up run will auto-fire this workflow and emit a real implications file.
+          EOF
+            echo "skip notice written"
+          else
+            echo "has_key=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop here if key missing (commit the notice)
+        if: ${{ steps.keycheck.outputs.has_key == 'false' }}
+        env:
+          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
+        run: |
+          git config user.name "wp-implications-bot"
+          git config user.email "wp-implications-bot@yks.local"
+          git add implications/MISSING-API-KEY-*.md
+          if ! git diff --cached --quiet; then
+            git commit -m "wp-implications: skip notice (ANTHROPIC key missing in yks-pubs secrets)"
+            git push origin HEAD:main
+          fi
+          echo "wp-implications-extract skipped — operator action required: set ANTHROPIC_API_KEY or CLIVE_ANTHROP_KEY in yks-pubs secrets"
+          exit 0
+
+      - name: Resolve slug + target_label (auto from upstream wp-level-up event OR manual input)
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_SLUG: ${{ github.event.inputs.slug }}
+          MANUAL_TARGET: ${{ github.event.inputs.target_label }}
+          MANUAL_SOURCE_REPO: ${{ github.event.inputs.source_repo }}
+          MANUAL_SOURCE_PATH: ${{ github.event.inputs.source_path }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          GH_TOKEN: ${{ secrets.MESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "slug=$MANUAL_SLUG" >> $GITHUB_OUTPUT
+            echo "target_label=$MANUAL_TARGET" >> $GITHUB_OUTPUT
+            echo "source_repo=$MANUAL_SOURCE_REPO" >> $GITHUB_OUTPUT
+            echo "source_path=$MANUAL_SOURCE_PATH" >> $GITHUB_OUTPUT
+          else
+            # Pull the upstream wp-level-up run's inputs from the workflow_run event
+            # via GitHub API (the inputs aren't directly in the event payload).
+            INPUTS=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${UPSTREAM_RUN_ID}" \
+              | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get("display_title","")))')
+            # display_title is the job name template "<transition> <slug> -> <target_label>"
+            # Parse for slug and target_label
+            python3 <<PY >> $GITHUB_OUTPUT
+          import json, re
+          s = $INPUTS
+          # Example: "errata-bump hgc3ae2-at-the-degraded-edge -> v1-1-preprint"
+          m = re.match(r'\s*(?P<transition>[\w-]+)\s+(?P<slug>[\w-]+)\s+->\s+(?P<target>[\w.-]+)', s)
+          if m:
+              print(f"slug={m.group('slug')}")
+              print(f"target_label={m.group('target')}")
+              # For workflow_run path, source_repo and source_path aren't directly available;
+              # we use heuristics: default source_repo=YKS-Spine-Binder, source_path looked up.
+              print("source_repo=YKS-Spine-Binder")
+              print(f"source_path=intake/papers/{m.group('slug')}/{m.group('slug')}-v1.0-preprint-draft.md")
+          else:
+              print("slug=")
+              print("target_label=")
+          PY
+          fi
+
+      - name: Bail if no slug resolved
+        if: ${{ steps.resolve.outputs.slug == '' }}
+        run: |
+          echo "no slug resolved; exiting cleanly"
+          exit 0
+
+      - name: Clone source repo for new paper markdown
+        env:
+          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
+          SOURCE_REPO: ${{ steps.resolve.outputs.source_repo }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/${SOURCE_REPO}.git" \
+            "$RUNNER_TEMP/source"
+
+      - name: Compose Anthropic prompt + invoke Claude Opus
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLIVE_KEY: ${{ secrets.CLIVE_ANTHROP_KEY }}
+          SLUG: ${{ steps.resolve.outputs.slug }}
+          TARGET_LABEL: ${{ steps.resolve.outputs.target_label }}
+          SOURCE_PATH: ${{ steps.resolve.outputs.source_path }}
+        run: |
+          set -euo pipefail
+          KEY="${CLIVE_KEY:-${ANTHROPIC_API_KEY}}"
+          NEW_PAPER="$RUNNER_TEMP/source/$SOURCE_PATH"
+          if [ ! -f "$NEW_PAPER" ]; then
+            echo "source not at $NEW_PAPER; trying default release path"
+            NEW_PAPER="$RUNNER_TEMP/source/works/non-fiction/white-papers/${SLUG}/release/v1.0-preprint/${SLUG}-v1.0-preprint.md"
+          fi
+          test -f "$NEW_PAPER" || { echo "FATAL: source paper not found"; exit 1; }
+          test -f framework-state.md || { echo "FATAL: framework-state.md not found; run wp-framework-rollup first"; exit 1; }
+
+          python3 -m pip install --quiet anthropic
+          python3 <<PY
+          import os, json, pathlib
+          import anthropic
+          client = anthropic.Anthropic(api_key="$KEY")
+          new_paper = pathlib.Path("$NEW_PAPER").read_text(encoding="utf-8")
+          framework = pathlib.Path("framework-state.md").read_text(encoding="utf-8")
+          slug = "$SLUG"
+          target = "$TARGET_LABEL"
+          system_prompt = (
+              "You are Clive — YKS architecture persona, Tier A on Opus. "
+              "Your job: given a newly-matured white paper and the current YKS framework state, "
+              "identify the forward implications. What new questions does this paper raise? "
+              "What gaps does it expose in the framework? What WPs or series should the operator "
+              "consider drafting next? Be concrete, terse, and cite specifically. "
+              "Output a structured Markdown document with these sections: "
+              "Abstract (3-5 sentence summary of what just shipped) · "
+              "Forward Implications (3-7 numbered items, each naming a specific open question or gap) · "
+              "Suggested Next Papers (1-3 concrete WP candidates with working titles and series-fit) · "
+              "Framework Coherence Check (any inconsistencies surfaced with prior published papers) · "
+              "Citation Graph Notes (load-bearing prior-paper citations the operator should preserve) · "
+              "Operator Decision Points (2-4 yes/no questions the operator should answer to set direction)."
+          )
+          user_prompt = (
+              f"# Newly matured paper\n\n"
+              f"**Slug:** \`{slug}\`\n**Target label:** \`{target}\`\n\n"
+              f"## New paper markdown\n\n{new_paper}\n\n"
+              f"---\n\n"
+              f"# Current YKS framework state\n\n{framework}"
+          )
+          resp = client.messages.create(
+              model="claude-opus-4-6",
+              max_tokens=4000,
+              system=system_prompt,
+              messages=[{"role": "user", "content": user_prompt}],
+          )
+          out_text = resp.content[0].text if resp.content else ""
+
+          out_dir = pathlib.Path("implications")
+          out_dir.mkdir(exist_ok=True)
+          out_file = out_dir / f"{slug}-{target}-implications.md"
+          out_file.write_text(
+              f"# Forward Implications — {slug} ({target})\n\n"
+              f"**Generated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)\n"
+              f"**Synthesis:** Claude Opus 4.6 via wp-implications-extract.yml\n"
+              f"**Prompt persona:** Clive (YKS architecture)\n"
+              f"**Inputs:** new paper markdown ({len(new_paper)} chars) + framework-state.md ({len(framework)} chars)\n\n"
+              f"---\n\n{out_text}\n",
+              encoding="utf-8")
+          print(f"implications written to {out_file} ({len(out_text)} chars)")
+          PY
+
+      - name: Commit + push implications file
+        env:
+          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
+          SLUG: ${{ steps.resolve.outputs.slug }}
+          TARGET_LABEL: ${{ steps.resolve.outputs.target_label }}
+        run: |
+          set -euo pipefail
+          git config user.name "wp-implications-bot"
+          git config user.email "wp-implications-bot@yks.local"
+          git add implications/
+          if ! git diff --cached --quiet; then
+            git commit -m "implications: ${SLUG} ${TARGET_LABEL} — Opus synthesis"
+            for attempt in 1 2 3; do
+              if git push origin HEAD:main; then break; fi
+              [ "$attempt" -eq 3 ] && { echo "push failed"; exit 1; }
+              git fetch origin main && git rebase origin/main
+              sleep $((attempt * 5))
+            done
+          fi
