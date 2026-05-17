@@ -279,14 +279,7 @@ jobs:
           ISSUES: ${{ steps.candidates.outputs.urls }}
         run: |
           if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then exit 0; fi
-          MSG="DONE wp-framework-uplift: $SLUG draft addendum ready for review.
-
-Edna produced ${M2} retrofit insertions + ${M3} future-study candidates.
-
-DRAFT addendum: ${ADDENDUM_URL}
-Future-study issues filed: ${ISSUES}
-
-NEXT (operator-fired, Tier C): review addendum, then fire wp-level-up with transition=errata-bump to compose ${TARGET} PDF and mint Zenodo DOI."
+          MSG="DONE wp-framework-uplift: $SLUG draft addendum ready for review. Edna produced ${M2} retrofit insertions + ${M3} future-study candidates. DRAFT addendum: ${ADDENDUM_URL}. Future-study issues filed: ${ISSUES}. NEXT (operator-fired, Tier C): review addendum, then fire wp-level-up with transition=errata-bump to compose ${TARGET} PDF and mint Zenodo DOI."
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" -o /dev/null
 
