@@ -4,6 +4,7 @@ name: wp-daily-orchestrator — fire one WP maturation each morning
 # Reads yks-pubs/maturation-queue.yml, takes the first enabled entry, fires either:
 #   - wp-level-up (compose + push PDF; transitions: errata-bump, preprint-promote, major-revision, peer-review-promote)
 #   - wp-pubs-site-mirror (just the reader-facing mirror; transition: pubs-mirror-only)
+#   - wp-framework-uplift (backward-enrichment editorial cycle; transition: framework-uplift — produces v1.x addendum DRAFT, operator must fire errata-bump to mint DOI)
 # Pings Telegram start + done. On success, pops the entry from the queue and commits
 # the update. On failure, leaves the entry in place and Telegram-pings the failure.
 
@@ -72,7 +73,7 @@ jobs:
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" -o /dev/null -w "start ping HTTP %{http_code}\n"
 
-      - name: Dispatch wp-level-up OR wp-pubs-site-mirror based on transition
+      - name: Dispatch wp-level-up, wp-pubs-site-mirror, OR wp-framework-uplift based on transition
         if: ${{ steps.queue.outputs.skip != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.MESH_TOKEN }}
@@ -85,6 +86,7 @@ jobs:
           TITLE_SUFFIX: ${{ steps.queue.outputs.title_suffix }}
           TRACKER: ${{ steps.queue.outputs.tracker }}
           DOI: ${{ steps.queue.outputs.doi }}
+          CURRENT_VERSION: ${{ steps.queue.outputs.current_version }}
         run: |
           set -euo pipefail
           if [ "$TRANSITION" = "pubs-mirror-only" ]; then
@@ -93,6 +95,19 @@ jobs:
               'slug': '$SLUG',
               'target_label': '$TARGET',
               'doi': '$DOI' if '$DOI' else 'pending'
+            }))")
+          elif [ "$TRANSITION" = "framework-uplift" ]; then
+            # NEW 2026-05-17: Edna backward-enrichment editorial cycle.
+            # Produces v1.x addendum DRAFT + future-study issues. STOPS BEFORE canon mint
+            # — operator must manually fire wp-level-up (transition=errata-bump) to mint DOI.
+            # Required queue fields: slug, current_version, target_label (target = the draft label).
+            WF="wp-framework-uplift.yml"
+            CUR="$CURRENT_VERSION"
+            [ -z "$CUR" ] && CUR="v1-preprint"  # safe default
+            INPUTS=$(python3 -c "import json; print(json.dumps({
+              'slug': '$SLUG',
+              'current_version': '$CUR',
+              'target_version': '$TARGET'
             }))")
           else
             WF="wp-level-up.yml"
