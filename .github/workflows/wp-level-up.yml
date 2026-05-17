@@ -1,0 +1,323 @@
+name: wp-level-up — mature a paper to its next level (Zenodo DOI auto-mints downstream)
+
+# Generic paper-promotion workflow. Picks up where compose-v11-errata.yml left off,
+# parametric on transition_type so the same backbone handles every level-up shape:
+#
+#   errata-bump          v1.x       -> v1.x+1     base + addendum -> PDF
+#   preprint-promote     v0.1-seed  -> v1-preprint base markdown -> PDF
+#   major-revision       v1.x       -> v2-preprint base markdown -> PDF
+#   peer-review-promote  v1.x       -> v1.x       same content, peer-review badge in metadata
+#
+# Every transition follows the same backbone:
+#   1. Clone source repo(s); resolve source markdown path.
+#   2. Compose combined markdown (with addendum if errata-bump; base alone otherwise).
+#   3. Compile to PDF via pandoc + xelatex.
+#   4. Stamp cover + footer + XMP via yks-web/scripts/stamp-paper-pdf.py.
+#   5. Push to yks-pubs/papers/<slug>-<target_label>.pdf using MESH_TOKEN.
+#   6. zenodo-deposit-release.yml auto-fires on the PDF push -> GitHub Release ->
+#      Zenodo's GitHub OAuth integration mints a DOI.
+#
+# Adopted 2026-05-17, supersedes compose-v11-errata.yml (which becomes a legacy alias
+# for the errata-bump transition).
+#
+# Pubs-site selection UX: today the operator picks a slug from
+# https://nonsequitur.tech/pubs/white-papers/ (or yks-pubs/papers/) and fires this
+# workflow via Actions UI workflow_dispatch. Future integration with the Yeti UI
+# dashboard (yks-execution#171 + the §12 errata-drift surface) will add a "Level Up"
+# button per paper that fires this workflow with the slug pre-filled.
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Paper slug (e.g. hgc3ae2-at-the-degraded-edge). Must match the canonical slug used on the pubs site.'
+        required: true
+        type: string
+      transition:
+        description: 'Maturity transition to apply'
+        required: true
+        type: choice
+        options:
+          - errata-bump
+          - preprint-promote
+          - major-revision
+          - peer-review-promote
+      source_repo:
+        description: 'Repo containing the source markdown'
+        required: true
+        type: string
+        default: 'YKS-Spine-Binder'
+      source_path:
+        description: 'Path to source markdown inside source_repo (this becomes the body of the new PDF)'
+        required: true
+        type: string
+      addendum_repo:
+        description: 'Repo containing the addendum (errata-bump only; leave default otherwise)'
+        required: false
+        type: string
+        default: 'YKS-Spine-Binder'
+      addendum_path:
+        description: 'Path to addendum markdown (errata-bump only; leave blank for other transitions)'
+        required: false
+        type: string
+        default: ''
+      target_label:
+        description: 'Target version label for the output PDF (e.g. v1-1-preprint, v1-preprint, v2-preprint)'
+        required: true
+        type: string
+      title_suffix:
+        description: 'Suffix to append to the paper title (e.g. " (v1.1 errata)" — optional)'
+        required: false
+        type: string
+        default: ''
+      tracker_issue:
+        description: 'Tracking issue (cross-repo OK, e.g. YKS-Spine-Binder#376) — optional'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'If true, compose + stamp but skip push (artifact uploaded for inspection)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+
+# Serialize all level-up pushes to main so parallel-fired runs don't race on git push.
+concurrency:
+  group: wp-level-up-push
+  cancel-in-progress: false
+
+jobs:
+  level-up:
+    name: ${{ inputs.transition }} ${{ inputs.slug }} -> ${{ inputs.target_label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout yks-pubs (MESH_TOKEN so push triggers downstream zenodo-deposit-release.yml)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MESH_TOKEN }}
+
+      - name: Validate inputs + check current pubs state
+        env:
+          SLUG: ${{ inputs.slug }}
+          TRANSITION: ${{ inputs.transition }}
+          TARGET_LABEL: ${{ inputs.target_label }}
+          ADDENDUM_PATH: ${{ inputs.addendum_path }}
+        run: |
+          set -euo pipefail
+          echo "=== wp-level-up dispatch ==="
+          echo "  slug:         $SLUG"
+          echo "  transition:   $TRANSITION"
+          echo "  target_label: $TARGET_LABEL"
+          echo "  addendum:     ${ADDENDUM_PATH:-(none)}"
+          echo
+          if [ "$TRANSITION" = "errata-bump" ] && [ -z "$ADDENDUM_PATH" ]; then
+            echo "FATAL: errata-bump requires addendum_path"; exit 1
+          fi
+          if [ "$TRANSITION" != "errata-bump" ] && [ -n "$ADDENDUM_PATH" ]; then
+            echo "WARNING: addendum_path supplied for non-errata transition; ignoring"
+          fi
+          # Show current pubs state for this slug
+          echo "=== Current papers/${SLUG}-*.pdf on yks-pubs ==="
+          ls -1 "papers/" | grep "^${SLUG}-" || echo "  (no existing PDFs for this slug)"
+          TARGET="papers/${SLUG}-${TARGET_LABEL}.pdf"
+          if [ -f "$TARGET" ]; then
+            echo "WARNING: target file $TARGET already exists; this run will overwrite it"
+          fi
+
+      - name: Clone source repos (yks-web for stamper + source_repo for manuscript)
+        env:
+          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          ADDENDUM_REPO: ${{ inputs.addendum_repo }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/yks-web.git" \
+            "$RUNNER_TEMP/yks-web"
+          git clone --depth 1 \
+            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/${SOURCE_REPO}.git" \
+            "$RUNNER_TEMP/source"
+          if [ "$SOURCE_REPO" != "$ADDENDUM_REPO" ]; then
+            git clone --depth 1 \
+              "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/${ADDENDUM_REPO}.git" \
+              "$RUNNER_TEMP/addendum"
+          else
+            ln -s "$RUNNER_TEMP/source" "$RUNNER_TEMP/addendum"
+          fi
+
+      - name: Install pandoc + xelatex + python deps
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra \
+            texlive-latex-recommended texlive-latex-extra lmodern
+          python3 -m pip install --quiet reportlab pypdf pyyaml
+
+      - name: Compose source markdown (transition-aware)
+        env:
+          TRANSITION: ${{ inputs.transition }}
+          SOURCE_PATH: ${{ inputs.source_path }}
+          ADDENDUM_PATH: ${{ inputs.addendum_path }}
+          TITLE_SUFFIX: ${{ inputs.title_suffix }}
+          TARGET_LABEL: ${{ inputs.target_label }}
+        run: |
+          set -euo pipefail
+          BASE_FILE="$RUNNER_TEMP/source/$SOURCE_PATH"
+          test -f "$BASE_FILE" || { echo "FATAL: source markdown not found at $BASE_FILE"; exit 1; }
+          echo "source size: $(wc -c < $BASE_FILE)"
+          if [ "$TRANSITION" = "errata-bump" ]; then
+            ADDENDUM_FILE="$RUNNER_TEMP/addendum/$ADDENDUM_PATH"
+            test -f "$ADDENDUM_FILE" || { echo "FATAL: addendum not found at $ADDENDUM_FILE"; exit 1; }
+            echo "addendum size: $(wc -c < $ADDENDUM_FILE)"
+          fi
+
+          python3 <<'PY'
+          import os, re, pathlib, yaml
+          tr = os.environ["TRANSITION"]
+          base = pathlib.Path(os.environ["RUNNER_TEMP"]) / "source" / os.environ["SOURCE_PATH"]
+          base_text = base.read_text(encoding="utf-8")
+          title_suffix = os.environ.get("TITLE_SUFFIX", "")
+          target_label = os.environ["TARGET_LABEL"]
+
+          # Parse base frontmatter
+          m = re.match(r"---\s*\n(.*?)\n---\s*\n(.*)", base_text, re.DOTALL)
+          if m:
+              base_fm = yaml.safe_load(m.group(1)) or {}
+              base_body = m.group(2)
+          else:
+              base_fm = {}
+              base_body = base_text
+
+          # Build new frontmatter — preserve author/title/canonical_url, bump version, append suffix
+          new_fm = dict(base_fm)
+          old_title = new_fm.get("title", "Untitled")
+          if title_suffix:
+              new_fm["title"] = old_title + title_suffix
+          # Derive a version field from target_label (strip leading 'v', replace - with .)
+          version_str = target_label.lstrip("v").replace("-", ".")
+          new_fm["version"] = version_str
+          # Drop prior DOI; the new Zenodo deposit gets its own
+          new_fm.pop("doi", None)
+          new_fm.pop("zenodo_doi", None)
+          new_fm["target_version"] = target_label
+          new_fm["date_of_writing"] = os.environ.get("GITHUB_RUN_STARTED_AT", "")[:10] or "2026-05-17"
+
+          # Compose body based on transition
+          if tr == "errata-bump":
+              adden = pathlib.Path(os.environ["RUNNER_TEMP"]) / "addendum" / os.environ["ADDENDUM_PATH"]
+              adden_text = adden.read_text(encoding="utf-8")
+              # Strip addendum's own frontmatter
+              m2 = re.match(r"---\s*\n.*?\n---\s*\n(.*)", adden_text, re.DOTALL)
+              adden_body = m2.group(1) if m2 else adden_text
+              body = (
+                  base_body.rstrip()
+                  + "\n\n---\n\n# Appendix — v1.1 Errata Addendum\n\n"
+                  + "_Added " + new_fm["date_of_writing"] + " per Round-2 EDITORIAL-STAMP HOLD-substance verdict. "
+                  + "The v1.0-preprint remains canonical at its original DOI; this v1.1 supplements with the corrections below._\n\n"
+                  + adden_body.rstrip()
+              )
+          elif tr == "peer-review-promote":
+              # No content change; just add a peer-review badge to frontmatter
+              new_fm["peer_reviewed"] = True
+              new_fm["peer_review_date"] = new_fm["date_of_writing"]
+              body = base_body.rstrip()
+          else:
+              # preprint-promote, major-revision: use base markdown directly
+              body = base_body.rstrip()
+
+          combined = (
+              "---\n"
+              + yaml.safe_dump(new_fm, allow_unicode=True, sort_keys=False)
+              + "---\n\n"
+              + body + "\n"
+          )
+          pathlib.Path("combined.md").write_text(combined, encoding="utf-8")
+          pathlib.Path("frontmatter.yaml").write_text(
+              yaml.safe_dump(new_fm, allow_unicode=True, sort_keys=False), encoding="utf-8")
+          print(f"combined.md: {len(combined)} chars  frontmatter.yaml emitted")
+          PY
+
+      - name: Compile combined markdown to raw manuscript PDF (pandoc + xelatex)
+        run: |
+          set -euo pipefail
+          pandoc combined.md \
+            --pdf-engine=xelatex \
+            -V mainfont="DejaVu Serif" \
+            -V monofont="DejaVu Sans Mono" \
+            -V geometry:margin=1in \
+            -V linkcolor=blue \
+            --toc \
+            -o "raw-manuscript.pdf"
+          echo "raw manuscript size: $(stat -c%s raw-manuscript.pdf) bytes"
+
+      - name: Run stamp-paper-pdf.py for cover/footer/XMP
+        env:
+          SLUG: ${{ inputs.slug }}
+          TARGET_LABEL: ${{ inputs.target_label }}
+        run: |
+          set -euo pipefail
+          mkdir -p papers
+          OUT="papers/${SLUG}-${TARGET_LABEL}.pdf"
+          python3 "$RUNNER_TEMP/yks-web/scripts/stamp-paper-pdf.py" \
+            --frontmatter frontmatter.yaml \
+            --in raw-manuscript.pdf \
+            --out "$OUT"
+          echo "stamped PDF: $OUT  size: $(stat -c%s $OUT) bytes  sha256: $(sha256sum $OUT | awk '{print $1}')"
+
+      - name: Upload stamped PDF as workflow artifact (visible regardless of dry_run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.slug }}-${{ inputs.target_label }}
+          path: papers/${{ inputs.slug }}-${{ inputs.target_label }}.pdf
+          retention-days: 14
+
+      - name: Commit + push to yks-pubs/papers/ (triggers zenodo-deposit-release.yml)
+        if: ${{ inputs.dry_run != true }}
+        env:
+          SLUG: ${{ inputs.slug }}
+          TARGET_LABEL: ${{ inputs.target_label }}
+          TRANSITION: ${{ inputs.transition }}
+          TRACKER: ${{ inputs.tracker_issue }}
+        run: |
+          set -euo pipefail
+          git config user.name "wp-level-up-bot"
+          git config user.email "wp-level-up-bot@yks.local"
+          git add "papers/${SLUG}-${TARGET_LABEL}.pdf"
+          MSG="wp-level-up (${TRANSITION}): ${SLUG} -> ${TARGET_LABEL}"
+          if [ -n "$TRACKER" ]; then
+            MSG="$MSG  (tracker: $TRACKER)"
+          fi
+          git commit -m "$MSG"
+
+          # Race-safe push with rebase retry — concurrency group serializes most
+          # cases, but stale-clone after a queued run lands a sibling commit can
+          # still reject. Retry up to 3 times.
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "push succeeded on attempt $attempt"; break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "push failed after 3 attempts"; exit 1
+            fi
+            echo "push rejected (attempt $attempt) — fetch + rebase + retry"
+            git fetch origin main
+            git rebase origin/main
+            sleep $((attempt * 5))
+          done
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run == true }}
+        env:
+          SLUG: ${{ inputs.slug }}
+          TARGET_LABEL: ${{ inputs.target_label }}
+        run: |
+          echo "=== DRY-RUN COMPLETE ==="
+          echo "Stamped PDF composed at papers/${SLUG}-${TARGET_LABEL}.pdf"
+          echo "Push to main was SKIPPED (dry_run=true)."
+          echo "Inspect the artifact to verify content + cover page before firing with dry_run=false."
