@@ -1,0 +1,177 @@
+name: wp-framework-rollup — generate framework-state.md from yks-web frontmatter
+
+# Scrapes yks-web/sites/nsq-pub/content/pubs/white-papers/*.md and composes a unified
+# framework-state.md digest at the root of yks-pubs. This file is the canonical
+# "everything published right now" anchor used by:
+#
+#   * wp-implications-extract.yml — Opus synthesis of next-implications per paper
+#   * wp-implications-daily-digest.yml — operator morning review surface
+#   * Klaus citation-integrity sweep (future) — verifies citation graph against actual
+#     published state, not stale register entries.
+#
+# Triggers:
+#   * workflow_dispatch — manual refresh
+#   * schedule — Sunday 0400 ET weekly snapshot
+#   * workflow_run — after every successful wp-level-up.yml run (auto-refresh on promotion)
+#
+# No API key required; pure scrape + assemble.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Sunday 04:00 ET = 08:00 UTC (winter) or 09:00 UTC (DST). Use 08:00 UTC; off-by-an-hour
+    # is acceptable for a weekly snapshot.
+    - cron: '0 8 * * 0'
+  workflow_run:
+    workflows: ['wp-level-up — mature a paper to its next level (Zenodo DOI auto-mints downstream)']
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wp-framework-rollup
+  cancel-in-progress: true
+
+jobs:
+  rollup:
+    name: Scrape yks-web frontmatter + compose framework-state.md
+    # Only run if the upstream wp-level-up succeeded (skip on failed promotions).
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout yks-pubs
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MESH_TOKEN }}
+
+      - name: Clone yks-web (read frontmatter)
+        env:
+          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/yks-web.git" \
+            "$RUNNER_TEMP/yks-web"
+
+      - name: Install python deps
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Compose framework-state.md from yks-web frontmatter
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os, re, pathlib, yaml, datetime, json
+          src = pathlib.Path(os.environ["RUNNER_TEMP"]) / "yks-web" / "sites" / "nsq-pub" / "content" / "pubs" / "white-papers"
+          papers = []
+          for f in sorted(src.glob("*.md")):
+              if f.name == "_index.md":
+                  continue
+              text = f.read_text(encoding="utf-8")
+              m = re.match(r"---\s*\n(.*?)\n---", text, re.DOTALL)
+              if not m:
+                  continue
+              try:
+                  fm = yaml.safe_load(m.group(1))
+              except Exception:
+                  continue
+              if not fm or fm.get("draft", True) is True:
+                  continue
+              papers.append(fm)
+
+          # Sort by published_date desc then slug
+          papers.sort(key=lambda p: (p.get("published_date") or p.get("date") or "", p.get("slug", "")), reverse=True)
+
+          # Compose markdown
+          today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+          out = []
+          out.append("# YKS Framework State")
+          out.append("")
+          out.append(f"**Generated:** {today} (auto-refresh on every wp-level-up + weekly snapshot)")
+          out.append(f"**Source:** `yks-web/sites/nsq-pub/content/pubs/white-papers/*.md` frontmatter")
+          out.append(f"**Published papers:** {len(papers)}")
+          out.append("")
+          out.append("This file is the canonical \"everything currently published\" anchor used by:")
+          out.append("- `wp-implications-extract.yml` — Opus synthesis when a paper matures")
+          out.append("- `wp-implications-daily-digest.yml` — morning operator review surface")
+          out.append("- Klaus citation-integrity sweep (future)")
+          out.append("")
+          out.append("---")
+          out.append("")
+
+          # Group by series
+          by_series = {}
+          for p in papers:
+              series_field = p.get("series")
+              if isinstance(series_field, dict):
+                  series_name = series_field.get("name", "(unattached)")
+              elif isinstance(series_field, str):
+                  series_name = series_field
+              else:
+                  series_name = "(unattached)"
+              by_series.setdefault(series_name, []).append(p)
+
+          for series, ps in sorted(by_series.items()):
+              out.append(f"## Series: {series}")
+              out.append("")
+              for p in ps:
+                  slug = p.get("slug", "?")
+                  title = p.get("title", "Untitled")
+                  version = p.get("version", "?")
+                  doi = p.get("doi", "")
+                  pub_date = p.get("published_date") or p.get("date", "")
+                  abstract = (p.get("abstract") or "").strip()
+                  keywords = p.get("keywords") or []
+                  url = p.get("canonical_url") or f"https://nonsequitur.tech/pubs/white-papers/{slug}/"
+
+                  out.append(f"### {title}")
+                  out.append("")
+                  out.append(f"- **Slug:** `{slug}`")
+                  out.append(f"- **Version:** {version}")
+                  out.append(f"- **Published:** {pub_date}")
+                  if doi:
+                      out.append(f"- **DOI:** [{doi}](https://doi.org/{doi})")
+                  out.append(f"- **URL:** {url}")
+                  if keywords:
+                      out.append(f"- **Keywords:** {', '.join(keywords)}")
+                  out.append("")
+                  if abstract:
+                      out.append("**Abstract.** " + abstract.replace("\n", " ").strip())
+                      out.append("")
+                  out.append("---")
+                  out.append("")
+
+          # Verdict-state appendix (read from latest editorial verdicts if available)
+          out.append("## Editorial verdict state (latest known)")
+          out.append("")
+          out.append("_Refreshed from YKS-Spine-Binder/reviews/round*-*/ stamp records on each rollup._")
+          out.append("")
+          # TODO v0.2: scrape reviews/round*/ for latest verdict per slug
+          out.append("(verdict surface pending — wp-framework-rollup.yml v0.2 will scrape spine-binder/reviews/)")
+
+          pathlib.Path("framework-state.md").write_text("\n".join(out), encoding="utf-8")
+          print(f"framework-state.md: {len('\\n'.join(out))} chars, {len(papers)} papers, {len(by_series)} series")
+          PY
+
+      - name: Commit + push if changed
+        env:
+          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "wp-framework-rollup-bot"
+          git config user.email "wp-framework-rollup-bot@yks.local"
+          git add framework-state.md
+          if git diff --cached --quiet; then
+            echo "no changes to framework-state.md; skipping push"
+          else
+            git commit -m "framework-state.md: regenerate from yks-web frontmatter ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+            for attempt in 1 2 3; do
+              if git push origin HEAD:main; then
+                echo "push succeeded on attempt $attempt"; break
+              fi
+              if [ "$attempt" -eq 3 ]; then echo "push failed"; exit 1; fi
+              git fetch origin main && git rebase origin/main
+              sleep $((attempt * 5))
+            done
+          fi
