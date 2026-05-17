@@ -60,6 +60,11 @@ on:
         description: 'Path to addendum markdown (errata-bump only; leave blank for other transitions)'
         required: false
         type: string
+      current_version:
+        description: 'Current published version (e.g., v1-preprint; used by WP Standards gate to locate prior PDF)'
+        required: false
+        type: string
+        default: 'v1-preprint' 
         default: ''
       target_label:
         description: 'Target version label for the output PDF (e.g. v1-1-preprint, v1-preprint, v2-preprint)'
@@ -158,6 +163,119 @@ jobs:
             pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra \
             texlive-latex-recommended texlive-latex-extra lmodern
           python3 -m pip install --quiet reportlab pypdf pyyaml
+
+      - name: WP Standards v1.1 compliance gate (2026-05-17 — major-revision MUST pass; minor bumps verify but warn)
+        id: standards
+        env:
+          TRANSITION: ${{ inputs.transition }}
+          SOURCE_PATH: ${{ inputs.source_path }}
+          SLUG: ${{ inputs.slug }}
+          CURRENT_VERSION: ${{ inputs.current_version }}
+          TARGET_LABEL: ${{ inputs.target_label }}
+          GH_TOKEN: ${{ secrets.MESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Find the current PDF (use prior major's preprint by default)
+          PAPER_PDF=""
+          for cand in "papers/${SLUG}-v1-2-preprint.pdf" "papers/${SLUG}-v1-1-preprint.pdf" "papers/${SLUG}-v1-preprint.pdf"; do
+            if [ -f "$cand" ]; then PAPER_PDF="$cand"; break; fi
+          done
+          if [ -z "$PAPER_PDF" ]; then
+            echo "no prior PDF found; first-time promotion — gate not applicable"
+            echo "gate_skipped=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          sudo apt-get install -y -qq poppler-utils >/dev/null 2>&1 || true
+          PAGES=$(pdfinfo "$PAPER_PDF" | awk '/^Pages:/ {print $2}')
+          echo "current PDF: $PAPER_PDF ($PAGES pages)"
+          echo "pages=$PAGES" >> $GITHUB_OUTPUT
+          # §1 — page floor (25)
+          GATE_FAILED=false
+          DEFICITS=""
+          if [ "$PAGES" -lt 25 ]; then
+            GATE_FAILED=true
+            DEFICITS="${DEFICITS}1,"
+            echo "§1 page floor FAILED: $PAGES < 25"
+          fi
+          # §6 — major-revision triggers full gate; minor transitions are warn-only
+          if [ "$TRANSITION" = "major-revision" ] && [ "$GATE_FAILED" = "true" ]; then
+            echo "MAJOR REVISION + STANDARDS DEFICIT — staging Edna substantive-expansion dispatch"
+            echo "gate_failed=true" >> $GITHUB_OUTPUT
+            echo "deficits=${DEFICITS%,}" >> $GITHUB_OUTPUT
+          elif [ "$GATE_FAILED" = "true" ]; then
+            echo "NON-MAJOR + STANDARDS DEFICIT — warning only, proceeding"
+            echo "gate_failed=false" >> $GITHUB_OUTPUT
+            echo "warned_deficits=${DEFICITS%,}" >> $GITHUB_OUTPUT
+          else
+            echo "STANDARDS PASS"
+            echo "gate_failed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build + stage Edna substantive-expansion dispatch (when major-revision fails standards)
+        if: ${{ steps.standards.outputs.gate_failed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.MESH_TOKEN }}
+          SLUG: ${{ inputs.slug }}
+          CURRENT_VERSION: ${{ inputs.current_version }}
+          TARGET_VERSION: ${{ inputs.target_label }}
+          TRANSITION: ${{ inputs.transition }}
+          PAGES: ${{ steps.standards.outputs.pages }}
+          DEFICITS: ${{ steps.standards.outputs.deficits }}
+          SOURCE_PATH: ${{ inputs.source_path }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq poppler-utils >/dev/null 2>&1 || true
+          pip install pyyaml --quiet
+          # Build doctrine corpus + canon + standards snapshots
+          python3 .github/scripts/build-doctrine-corpus.py             --web-content "$RUNNER_TEMP/yks-web/sites/nsq-pub/content/pubs/white-papers"             --output /tmp/doctrine-corpus.md             --exclude-slug "$SLUG" || echo "(corpus build had warnings)"
+          # Canon snapshot
+          {
+            echo "# yks-canon CANON.md"; echo
+            cat "$RUNNER_TEMP/yks-canon/CANON.md" 2>/dev/null || echo "(canon not checked out at runner-temp; expected when yks-canon is not a default checkout)"
+          } > /tmp/canon-foundations.md
+          # WP Standards
+          curl -s -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/LittleYeti-Dev/yks-canon/contents/governance/2026-05-17-wp-publishing-standards-v1-proposed.md?ref=main"             | python3 -c "import json,sys,base64; d=json.load(sys.stdin); open('/tmp/wp-standards.md','wb').write(base64.b64decode(d['content']))"
+          # Locate current paper PDF + md
+          PAPER_PDF=""
+          for cand in "papers/${SLUG}-v1-2-preprint.pdf" "papers/${SLUG}-v1-1-preprint.pdf" "papers/${SLUG}-v1-preprint.pdf"; do
+            if [ -f "$cand" ]; then PAPER_PDF="$cand"; break; fi
+          done
+          PAPER_MD="$RUNNER_TEMP/source/$SOURCE_PATH"
+          DISPATCH_NAME="dispatch-edna-substantive-expansion-${SLUG}-$(date -u +%Y-%m-%d).md"
+          DISPATCH_PATH="/tmp/$DISPATCH_NAME"
+          python3 .github/scripts/build-standards-compliance-dispatch.py             --slug "$SLUG"             --current-version "$CURRENT_VERSION"             --target-version "$TARGET_VERSION"             --transition "$TRANSITION"             --pages "$PAGES"             --pages-required 25             --paper-pdf "$PAPER_PDF"             --paper-md "$PAPER_MD"             --doctrine-corpus /tmp/doctrine-corpus.md             --canon-foundations /tmp/canon-foundations.md             --wp-standards /tmp/wp-standards.md             --deficits "$DEFICITS"             --output "$DISPATCH_PATH"
+          # Stage to yks-ops-hub/execute/lz/ via Contents API
+          B64=$(base64 -w 0 "$DISPATCH_PATH")
+          python3 -c "
+          import json,os
+          payload = {
+            'message': f'edna: WP Standards v1.1 gate failed for {os.environ["SLUG"]} ({os.environ["TRANSITION"]} → {os.environ["TARGET_VERSION"]}) — substantive-expansion dispatch auto-staged. {os.environ["PAGES"]} pages, gate requires >=25. Cowork-Edna Tier-B work owed.',
+            'content': '$B64',
+            'branch': 'main',
+            'committer': {'name': 'wp-standards-gate-bot', 'email': 'wp-standards-gate-bot@yks.local'}
+          }
+          print(json.dumps(payload))
+          " > /tmp/dispatch-pl.json
+          HTTP=$(curl -s -o /tmp/dispatch-resp.json -w "%{http_code}"             -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json"             --data-binary @/tmp/dispatch-pl.json             "https://api.github.com/repos/LittleYeti-Dev/yks-ops-hub/contents/execute/lz/$DISPATCH_NAME")
+          echo "Edna dispatch staged: HTTP $HTTP"
+
+      - name: HALT — major revision blocked by standards gate
+        if: ${{ steps.standards.outputs.gate_failed == 'true' }}
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLUG: ${{ inputs.slug }}
+          TRANSITION: ${{ inputs.transition }}
+          TARGET: ${{ inputs.target_label }}
+          PAGES: ${{ steps.standards.outputs.pages }}
+          DEFICITS: ${{ steps.standards.outputs.deficits }}
+        run: |
+          if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
+            MSG="HALT wp-level-up: $SLUG $TRANSITION -> $TARGET blocked by WP Standards v1.1 gate (pages=$PAGES, deficits=$DEFICITS). Edna substantive-expansion dispatch auto-staged in yks-ops-hub/execute/lz/. Cowork-Edna Tier-B work owed before re-fire."
+            curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage"               -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" -o /dev/null
+          fi
+          echo "::error::WP Standards v1.1 gate blocked $TRANSITION for $SLUG — Edna dispatch staged. Halting workflow."
+          exit 1
 
       - name: Compose source markdown (transition-aware)
         env:
