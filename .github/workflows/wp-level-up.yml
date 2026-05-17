@@ -245,16 +245,21 @@ jobs:
           python3 .github/scripts/build-standards-compliance-dispatch.py             --slug "$SLUG"             --current-version "$CURRENT_VERSION"             --target-version "$TARGET_VERSION"             --transition "$TRANSITION"             --pages "$PAGES"             --pages-required 25             --paper-pdf "$PAPER_PDF"             --paper-md "$PAPER_MD"             --doctrine-corpus /tmp/doctrine-corpus.md             --canon-foundations /tmp/canon-foundations.md             --wp-standards /tmp/wp-standards.md             --deficits "$DEFICITS"             --output "$DISPATCH_PATH"
           # Stage to yks-ops-hub/execute/lz/ via Contents API
           B64=$(base64 -w 0 "$DISPATCH_PATH")
-          python3 -c "
-          import json,os
+          export B64
+          python3 <<'PY' > /tmp/dispatch-pl.json
+          import json, os
+          slug = os.environ["SLUG"]
+          tr = os.environ["TRANSITION"]
+          tv = os.environ["TARGET_VERSION"]
+          pages = os.environ["PAGES"]
           payload = {
-            'message': f'edna: WP Standards v1.1 gate failed for {os.environ["SLUG"]} ({os.environ["TRANSITION"]} → {os.environ["TARGET_VERSION"]}) — substantive-expansion dispatch auto-staged. {os.environ["PAGES"]} pages, gate requires >=25. Cowork-Edna Tier-B work owed.',
-            'content': '$B64',
-            'branch': 'main',
-            'committer': {'name': 'wp-standards-gate-bot', 'email': 'wp-standards-gate-bot@yks.local'}
+            "message": f"edna: WP Standards v1.1 gate failed for {slug} ({tr} -> {tv}) - substantive-expansion dispatch auto-staged. {pages} pages, gate requires >=25. Cowork-Edna Tier-B work owed.",
+            "content": os.environ["B64"],
+            "branch": "main",
+            "committer": {"name": "wp-standards-gate-bot", "email": "wp-standards-gate-bot@yks.local"}
           }
           print(json.dumps(payload))
-          " > /tmp/dispatch-pl.json
+          PY
           HTTP=$(curl -s -o /tmp/dispatch-resp.json -w "%{http_code}"             -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json"             --data-binary @/tmp/dispatch-pl.json             "https://api.github.com/repos/LittleYeti-Dev/yks-ops-hub/contents/execute/lz/$DISPATCH_NAME")
           echo "Edna dispatch staged: HTTP $HTTP"
 
