@@ -1,0 +1,238 @@
+name: compose-v11-errata — build v1.1 PDF + push to yks-pubs (auto-mints Zenodo DOI)
+
+# Composes a v1.1 errata PDF by:
+#  1. Pulling the base v1.0 manuscript markdown from spine-binder
+#  2. Appending the v1.1 errata addendum markdown as an appendix
+#  3. Compiling combined markdown to PDF via pandoc + xelatex
+#  4. Running yks-web/scripts/stamp-paper-pdf.py for cover/footer/XMP
+#  5. Pushing the stamped PDF to yks-pubs/papers/<slug>-<target>.pdf
+#
+# The push to papers/*.pdf then triggers zenodo-deposit-release.yml, which
+# creates a GitHub Release per PDF, which Zenodo's GitHub integration
+# auto-deposits + mints a new DOI for.
+#
+# Adopted 2026-05-17 to handle the 4 errata trackers (Paper Two #312,
+# EDO-P2 #376, EDO-P8 #377, EDO-P9 #378) as the first v1.1 batch.
+# Reusable for future errata cycles.
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Paper slug (e.g. hgc3ae2-at-the-degraded-edge)'
+        required: true
+        type: string
+      base_repo:
+        description: 'Repo containing the base v1.0 markdown'
+        required: true
+        type: string
+        default: 'YKS-Spine-Binder'
+      base_path:
+        description: 'Path to v1.0 markdown inside base_repo'
+        required: true
+        type: string
+      addendum_repo:
+        description: 'Repo containing the addendum markdown'
+        required: true
+        type: string
+        default: 'YKS-Spine-Binder'
+      addendum_path:
+        description: 'Path to v1.1 errata addendum markdown inside addendum_repo'
+        required: true
+        type: string
+      target_version:
+        description: 'Target PDF version label (e.g. v1-1-preprint)'
+        required: true
+        type: string
+        default: 'v1-1-preprint'
+      title_suffix:
+        description: 'Suffix appended to base title (e.g. " (v1.1 errata)")'
+        required: false
+        type: string
+        default: ' (v1.1 errata)'
+      tracker_issue:
+        description: 'GitHub issue tracking this errata (cross-repo OK, e.g. YKS-Spine-Binder#376)'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'If true, compose+stamp the PDF but skip push (artifact uploaded for inspection)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  compose-and-push:
+    name: Compose v1.1 errata PDF for ${{ inputs.slug }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout yks-pubs
+        uses: actions/checkout@v4
+
+      - name: Clone source repos (yks-web for stamper + base_repo for manuscript)
+        env:
+          MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
+          BASE_REPO: ${{ inputs.base_repo }}
+          ADDENDUM_REPO: ${{ inputs.addendum_repo }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/yks-web.git" \
+            "$RUNNER_TEMP/yks-web"
+          git clone --depth 1 \
+            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/${BASE_REPO}.git" \
+            "$RUNNER_TEMP/base"
+          if [ "$BASE_REPO" != "$ADDENDUM_REPO" ]; then
+            git clone --depth 1 \
+              "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/${ADDENDUM_REPO}.git" \
+              "$RUNNER_TEMP/addendum"
+          else
+            ln -s "$RUNNER_TEMP/base" "$RUNNER_TEMP/addendum"
+          fi
+
+      - name: Install pandoc + xelatex + python deps
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra \
+            texlive-latex-recommended texlive-latex-extra
+          python3 -m pip install --quiet reportlab pypdf pyyaml
+
+      - name: Compose combined markdown (base + addendum appendix)
+        env:
+          BASE_PATH: ${{ inputs.base_path }}
+          ADDENDUM_PATH: ${{ inputs.addendum_path }}
+          SLUG: ${{ inputs.slug }}
+          TITLE_SUFFIX: ${{ inputs.title_suffix }}
+        run: |
+          set -euo pipefail
+          BASE_FILE="$RUNNER_TEMP/base/$BASE_PATH"
+          ADDENDUM_FILE="$RUNNER_TEMP/addendum/$ADDENDUM_PATH"
+          test -f "$BASE_FILE" || { echo "FATAL: base markdown not found at $BASE_FILE"; exit 1; }
+          test -f "$ADDENDUM_FILE" || { echo "FATAL: addendum markdown not found at $ADDENDUM_FILE"; exit 1; }
+          echo "base size: $(wc -c < $BASE_FILE)"
+          echo "addendum size: $(wc -c < $ADDENDUM_FILE)"
+
+          # Strip the base frontmatter (between leading --- pairs); we re-emit a v1.1 frontmatter
+          # later. The body of the base goes into the combined markdown.
+          python3 <<PY
+          import re, pathlib, yaml, sys, os
+          base = pathlib.Path(os.environ["RUNNER_TEMP"]) / "base" / os.environ["BASE_PATH"]
+          adden = pathlib.Path(os.environ["RUNNER_TEMP"]) / "addendum" / os.environ["ADDENDUM_PATH"]
+          base_text = base.read_text(encoding="utf-8")
+          adden_text = adden.read_text(encoding="utf-8")
+          # Parse base frontmatter
+          m = re.match(r"---\s*\n(.*?)\n---\s*\n(.*)", base_text, re.DOTALL)
+          if not m:
+              # No frontmatter — pass through
+              base_fm = {}
+              base_body = base_text
+          else:
+              base_fm = yaml.safe_load(m.group(1)) or {}
+              base_body = m.group(2)
+          # Strip addendum frontmatter if present
+          m2 = re.match(r"---\s*\n.*?\n---\s*\n(.*)", adden_text, re.DOTALL)
+          adden_body = m2.group(1) if m2 else adden_text
+
+          # Build v1.1 frontmatter — preserve base author/title/canonical_url, bump version,
+          # append title suffix, drop v1.0 DOI (a new DOI mints on Zenodo deposit).
+          new_fm = dict(base_fm)
+          old_title = new_fm.get("title", "Untitled")
+          new_fm["title"] = old_title + os.environ.get("TITLE_SUFFIX", "")
+          new_fm["version"] = "1.1-preprint"
+          # Don't carry the v1.0 DOI forward; the new Zenodo deposit gets its own
+          new_fm.pop("doi", None)
+          new_fm.pop("zenodo_doi", None)
+          # Update target_version + chain_state if present
+          new_fm["target_version"] = "v1.1-preprint"
+          new_fm["promotion_from"] = f"{old_title} v1.0-preprint ({new_fm.get('doi','no-prior-doi')})"
+          new_fm["date_of_writing"] = "2026-05-17"
+
+          # Compose combined markdown body
+          combined = (
+              "---\n"
+              + yaml.safe_dump(new_fm, allow_unicode=True, sort_keys=False)
+              + "---\n\n"
+              + base_body.rstrip()
+              + "\n\n---\n\n"
+              + "# Appendix — v1.1 Errata Addendum\n\n"
+              + "_Added 2026-05-17 per Round-2 EDITORIAL-STAMP HOLD-substance verdict. "
+              + "The v1.0-preprint remains canonical at its original DOI; this v1.1 supplements with the corrections below._\n\n"
+              + adden_body.rstrip() + "\n"
+          )
+          pathlib.Path("combined.md").write_text(combined, encoding="utf-8")
+          # Also emit frontmatter for stamp-paper-pdf.py
+          pathlib.Path("frontmatter.yaml").write_text(yaml.safe_dump(new_fm, allow_unicode=True, sort_keys=False), encoding="utf-8")
+          print(f"combined.md: {len(combined)} chars  frontmatter.yaml emitted")
+          PY
+
+      - name: Compile combined markdown to raw manuscript PDF (pandoc + xelatex)
+        env:
+          SLUG: ${{ inputs.slug }}
+        run: |
+          set -euo pipefail
+          pandoc combined.md \
+            --pdf-engine=xelatex \
+            -V mainfont="DejaVu Serif" \
+            -V monofont="DejaVu Sans Mono" \
+            -V geometry:margin=1in \
+            -V linkcolor=blue \
+            --toc \
+            -o "raw-manuscript.pdf"
+          echo "raw manuscript size: $(stat -c%s raw-manuscript.pdf) bytes"
+
+      - name: Run stamp-paper-pdf.py for cover/footer/XMP
+        env:
+          SLUG: ${{ inputs.slug }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p papers
+          OUT="papers/${SLUG}-${TARGET_VERSION}.pdf"
+          python3 "$RUNNER_TEMP/yks-web/scripts/stamp-paper-pdf.py" \
+            --frontmatter frontmatter.yaml \
+            --in raw-manuscript.pdf \
+            --out "$OUT"
+          echo "stamped PDF: $OUT  size: $(stat -c%s $OUT) bytes  sha256: $(sha256sum $OUT | awk '{print $1}')"
+
+      - name: Upload stamped PDF as workflow artifact (visible regardless of dry_run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.slug }}-${{ inputs.target_version }}
+          path: papers/${{ inputs.slug }}-${{ inputs.target_version }}.pdf
+          retention-days: 14
+
+      - name: Commit + push to yks-pubs/papers/ (triggers zenodo-deposit-release.yml)
+        if: ${{ inputs.dry_run != true }}
+        env:
+          SLUG: ${{ inputs.slug }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+          TRACKER: ${{ inputs.tracker_issue }}
+        run: |
+          set -euo pipefail
+          git config user.name "yks-pubs-compose-bot"
+          git config user.email "yks-pubs-compose-bot@yks.local"
+          git add "papers/${SLUG}-${TARGET_VERSION}.pdf"
+          MSG="v1.1 errata: ${SLUG} ${TARGET_VERSION} — auto-composed by compose-v11-errata workflow"
+          if [ -n "$TRACKER" ]; then
+            MSG="$MSG (tracker: $TRACKER)"
+          fi
+          git commit -m "$MSG"
+          git push origin HEAD:main
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run == true }}
+        env:
+          SLUG: ${{ inputs.slug }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+        run: |
+          echo "=== DRY-RUN COMPLETE ==="
+          echo "Stamped PDF composed at papers/${SLUG}-${TARGET_VERSION}.pdf"
+          echo "Push to main was SKIPPED (dry_run=true)."
+          echo "Inspect the artifact to verify content + cover page before firing with dry_run=false."
