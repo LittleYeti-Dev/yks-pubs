@@ -65,14 +65,22 @@ permissions:
   contents: write
   actions: read
 
+# Serialize pushes to main so parallel-fired runs don't race on git push.
+# cancel-in-progress: false → later runs queue rather than cancel.
+concurrency:
+  group: compose-v11-errata-push
+  cancel-in-progress: false
+
 jobs:
   compose-and-push:
     name: Compose v1.1 errata PDF for ${{ inputs.slug }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout yks-pubs
+      - name: Checkout yks-pubs (with MESH_TOKEN so push can trigger downstream workflows)
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MESH_TOKEN }}
 
       - name: Clone source repos (yks-web for stamper + base_repo for manuscript)
         env:
@@ -225,7 +233,22 @@ jobs:
             MSG="$MSG (tracker: $TRACKER)"
           fi
           git commit -m "$MSG"
-          git push origin HEAD:main
+
+          # Race-safe push with rebase retry — concurrent run may have landed a commit while we were
+          # composing. Retry up to 3 times with pull --rebase between attempts.
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "push succeeded on attempt $attempt"
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "push failed after 3 attempts"; exit 1
+            fi
+            echo "push rejected (attempt $attempt) — fetch + rebase + retry"
+            git fetch origin main
+            git rebase origin/main
+            sleep $((attempt * 5))
+          done
 
       - name: Dry-run summary
         if: ${{ inputs.dry_run == true }}
