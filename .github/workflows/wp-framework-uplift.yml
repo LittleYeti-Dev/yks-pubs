@@ -1,0 +1,348 @@
+name: wp-framework-uplift — backward-enrichment editorial cycle (NOT a canon mint)
+
+# Triggered by wp-daily-orchestrator (or manual dispatch). For one target paper:
+#   1. Build doctrine corpus + canon snapshot
+#   2. Compose Edna backward-enrichment dispatch (paper + corpus + canon all inlined)
+#   3. Stage dispatch to yks-ops-hub/execute/lz/ — Tier-A worker fires it
+#   4. Poll yks-ops-hub/execute/work/edna/ for the work product (up to 12 min)
+#   5. Parse Movement 2 → write draft v1.1 errata addendum to yks-spine-binder/intake/papers/<slug>/
+#   6. Parse Movement 3 → file each candidate as a yks-spine-binder tracking issue
+#   7. Telegram-ping operator with addendum location + issue list + next step (operator-fired errata-bump)
+#
+# This workflow STOPS BEFORE the canon mint. Operator must manually fire wp-level-up with
+# transition: errata-bump to compose the v1.1 PDF and mint a new Zenodo DOI (Tier C invariant).
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Paper slug (e.g., hgc3ae2-at-the-degraded-edge)'
+        required: true
+        type: string
+      current_version:
+        description: 'Current published version (e.g., v1-preprint, v1-1-preprint)'
+        required: true
+        type: string
+        default: 'v1-preprint'
+      target_version:
+        description: 'Target version label for the addendum (e.g., v1-1-preprint)'
+        required: true
+        type: string
+        default: 'v1-1-preprint'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wp-framework-uplift-${{ inputs.slug }}
+  cancel-in-progress: false
+
+jobs:
+  uplift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25  # 12 min Edna wait + 8 min processing + 5 min margin
+    steps:
+      - name: Telegram ping — start
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLUG: ${{ inputs.slug }}
+          CURRENT: ${{ inputs.current_version }}
+          TARGET: ${{ inputs.target_version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then exit 0; fi
+          MSG="wp-framework-uplift START: $SLUG ($CURRENT -> $TARGET addendum draft). Tier-A Edna firing. Run: $RUN_URL"
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" -o /dev/null
+
+      - name: Checkout yks-pubs (workflow source + scripts)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MESH_TOKEN }}
+          path: yks-pubs
+
+      - name: Checkout yks-web (for doctrine corpus scrape)
+        uses: actions/checkout@v4
+        with:
+          repository: LittleYeti-Dev/yks-web
+          token: ${{ secrets.MESH_TOKEN }}
+          path: yks-web
+
+      - name: Checkout yks-canon (for foundational canon)
+        uses: actions/checkout@v4
+        with:
+          repository: LittleYeti-Dev/yks-canon
+          token: ${{ secrets.MESH_TOKEN }}
+          path: yks-canon
+
+      - name: Checkout yks-ops-hub (dispatch staging target)
+        uses: actions/checkout@v4
+        with:
+          repository: LittleYeti-Dev/yks-ops-hub
+          token: ${{ secrets.MESH_TOKEN }}
+          path: yks-ops-hub
+
+      - name: Checkout yks-spine-binder (addendum + issue target)
+        uses: actions/checkout@v4
+        with:
+          repository: LittleYeti-Dev/yks-spine-binder
+          token: ${{ secrets.MESH_TOKEN }}
+          path: yks-spine-binder
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils
+          pip install pyyaml --quiet
+
+      - name: Build doctrine corpus from yks-web frontmatter
+        env:
+          SLUG: ${{ inputs.slug }}
+        run: |
+          set -euo pipefail
+          python3 yks-pubs/.github/scripts/build-doctrine-corpus.py \
+            --web-content yks-web/sites/nsq-pub/content/pubs/white-papers \
+            --output /tmp/doctrine-corpus.md \
+            --exclude-slug "$SLUG"
+          wc -c /tmp/doctrine-corpus.md
+
+      - name: Build foundational canon snapshot
+        run: |
+          set -euo pipefail
+          {
+            echo "# yks-canon CANON.md"; echo
+            cat yks-canon/CANON.md
+            echo; echo "---"; echo "# paper-drafting-chain.md"; echo
+            cat yks-canon/governance/paper-drafting-chain.md 2>/dev/null || echo "(not present)"
+            echo; echo "---"; echo "# white-paper-register.md"; echo
+            cat yks-canon/white-paper-register.md 2>/dev/null || echo "(not present)"
+          } > /tmp/canon-foundations.md
+          wc -c /tmp/canon-foundations.md
+
+      - name: Locate paper PDF
+        id: pdf
+        env:
+          SLUG: ${{ inputs.slug }}
+          CURRENT: ${{ inputs.current_version }}
+        run: |
+          set -euo pipefail
+          PDF="yks-pubs/papers/${SLUG}-${CURRENT}.pdf"
+          test -f "$PDF" || { echo "FATAL: paper not at $PDF"; exit 1; }
+          echo "path=$PDF" >> $GITHUB_OUTPUT
+          echo "found: $PDF ($(stat -c%s $PDF) bytes)"
+
+      - name: Compose Edna backward-enrichment dispatch
+        id: dispatch
+        env:
+          SLUG: ${{ inputs.slug }}
+          CURRENT: ${{ inputs.current_version }}
+          PDF: ${{ steps.pdf.outputs.path }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%Y-%m-%d)
+          DISPATCH_NAME="dispatch-edna-${SLUG}-doctrine-enrichment-${DATE}.md"
+          DISPATCH_PATH="/tmp/${DISPATCH_NAME}"
+          python3 yks-pubs/.github/scripts/build-enrichment-dispatch.py \
+            --slug "$SLUG" \
+            --paper-pdf "$PDF" \
+            --corpus /tmp/doctrine-corpus.md \
+            --canon /tmp/canon-foundations.md \
+            --output "$DISPATCH_PATH" \
+            --current-version "$CURRENT"
+          echo "name=$DISPATCH_NAME" >> $GITHUB_OUTPUT
+          echo "path=$DISPATCH_PATH" >> $GITHUB_OUTPUT
+          echo "work_basename=${DISPATCH_NAME%.md}.work.md" >> $GITHUB_OUTPUT
+          wc -c "$DISPATCH_PATH"
+
+      - name: Stage dispatch to yks-ops-hub/execute/lz/
+        env:
+          DISPATCH_PATH: ${{ steps.dispatch.outputs.path }}
+          DISPATCH_NAME: ${{ steps.dispatch.outputs.name }}
+          SLUG: ${{ inputs.slug }}
+        run: |
+          set -euo pipefail
+          cp "$DISPATCH_PATH" "yks-ops-hub/execute/lz/$DISPATCH_NAME"
+          cd yks-ops-hub
+          git config user.name "wp-framework-uplift-bot"
+          git config user.email "wp-framework-uplift-bot@yks.local"
+          git add "execute/lz/$DISPATCH_NAME"
+          git commit -m "edna: framework-uplift backward-enrichment for ${SLUG} (auto-staged)"
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then break; fi
+            [ "$attempt" -eq 3 ] && { echo "push failed"; exit 1; }
+            git fetch origin main && git rebase origin/main
+            sleep $((attempt * 5))
+          done
+          echo "staged $DISPATCH_NAME"
+
+      - name: Poll for Edna work product (max 12 min)
+        id: poll
+        env:
+          GH_TOKEN: ${{ secrets.MESH_TOKEN }}
+          WORK_BASENAME: ${{ steps.dispatch.outputs.work_basename }}
+        run: |
+          set -euo pipefail
+          WORK_PATH="execute/work/edna/${WORK_BASENAME}"
+          REACHABLE=false
+          for attempt in $(seq 1 24); do
+            sleep 30
+            HTTP=$(curl -s -o /tmp/wp.json -w "%{http_code}" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/LittleYeti-Dev/yks-ops-hub/contents/${WORK_PATH}?ref=main")
+            if [ "$HTTP" = "200" ]; then
+              REACHABLE=true
+              python3 -c "import json,base64; d=json.load(open('/tmp/wp.json')); open('/tmp/edna-work.md','wb').write(base64.b64decode(d['content']))"
+              SIZE=$(stat -c%s /tmp/edna-work.md)
+              echo "Edna work product landed on attempt $attempt: $SIZE bytes"
+              echo "size=$SIZE" >> $GITHUB_OUTPUT
+              break
+            fi
+            echo "attempt $attempt: HTTP $HTTP (waiting 30s)"
+          done
+          echo "reachable=$REACHABLE" >> $GITHUB_OUTPUT
+          if [ "$REACHABLE" != "true" ]; then
+            echo "TIMEOUT: Edna work product not visible at $WORK_PATH after 12 min"
+            exit 1
+          fi
+
+      - name: Parse Movement 2 retrofits + Movement 3 candidates
+        id: parse
+        env:
+          SLUG: ${{ inputs.slug }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/parsed
+          python3 yks-pubs/.github/scripts/parse-edna-movements.py \
+            --work-product /tmp/edna-work.md \
+            --slug "$SLUG" \
+            --output-dir /tmp/parsed
+          M2_COUNT=$(cat /tmp/parsed/movement-2-count.txt)
+          M3_COUNT=$(cat /tmp/parsed/movement-3-count.txt)
+          echo "m2_count=$M2_COUNT" >> $GITHUB_OUTPUT
+          echo "m3_count=$M3_COUNT" >> $GITHUB_OUTPUT
+          echo "Parsed: $M2_COUNT retrofits + $M3_COUNT candidates"
+
+      - name: Commit draft addendum to yks-spine-binder
+        id: addendum
+        env:
+          SLUG: ${{ inputs.slug }}
+          TARGET: ${{ inputs.target_version }}
+        run: |
+          set -euo pipefail
+          DST_DIR="yks-spine-binder/intake/papers/${SLUG}"
+          mkdir -p "$DST_DIR"
+          DST="${DST_DIR}/${TARGET}-errata-addendum-DRAFT.md"
+          cp /tmp/parsed/movement-2-addendum-draft.md "$DST"
+          cd yks-spine-binder
+          git config user.name "wp-framework-uplift-bot"
+          git config user.email "wp-framework-uplift-bot@yks.local"
+          git add "intake/papers/${SLUG}/${TARGET}-errata-addendum-DRAFT.md"
+          git commit -m "edna: framework-uplift draft addendum for ${SLUG} ${TARGET} (operator review required before canon mint)"
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then break; fi
+            [ "$attempt" -eq 3 ] && exit 1
+            git fetch origin main && git rebase origin/main
+            sleep $((attempt * 5))
+          done
+          # Compute the file URL
+          ADDENDUM_URL="https://github.com/LittleYeti-Dev/yks-spine-binder/blob/main/intake/papers/${SLUG}/${TARGET}-errata-addendum-DRAFT.md"
+          echo "url=$ADDENDUM_URL" >> $GITHUB_OUTPUT
+          echo "committed addendum"
+
+      - name: File Movement 3 candidates as yks-spine-binder issues
+        id: candidates
+        env:
+          GH_TOKEN: ${{ secrets.MESH_TOKEN }}
+          SLUG: ${{ inputs.slug }}
+        run: |
+          set -euo pipefail
+          ISSUE_URLS=""
+          ISSUE_COUNT=0
+          while IFS= read -r line; do
+            TITLE=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d['title'][:80])")
+            BODY=$(echo "$line" | python3 -c "
+import json,sys
+d=json.loads(sys.stdin.read())
+print(f'**Filed by:** wp-framework-uplift (autonomous Movement 3 extraction from \`{__import__(\"os\").environ[\"SLUG\"]}\` backward-enrichment review)')
+print(f'**Type:** future-study candidate')
+print()
+print(f'## Working title')
+print(f'{d[\"title\"]}')
+print()
+print(f'## Gap closed')
+print(f'{d[\"gap_closed\"]}')
+print()
+print(f'## Series fit')
+print(f'{d[\"series_fit\"]}')
+print()
+print(f'## Rationale')
+print(f'{d[\"rationale\"]}')
+print()
+print(f'## Provenance')
+print(f'- Source: framework-uplift cycle for `{__import__(\"os\").environ[\"SLUG\"]}`')
+print(f'- Extracted from: Edna Movement 3 future-study analysis')
+print(f'- Operator review required before drafting authorization')
+")
+            python3 -c "
+import json
+print(json.dumps({
+  'title': 'wp:signal — '+'''$TITLE''',
+  'body': '''$BODY''',
+  'labels': ['kind:wp-signal', 'source:framework-uplift', 'paper:${SLUG}']
+}))" > /tmp/issue-payload.json
+            HTTP=$(curl -s -o /tmp/issue-resp.json -w "%{http_code}" \
+              -X POST -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              --data-binary @/tmp/issue-payload.json \
+              "https://api.github.com/repos/LittleYeti-Dev/yks-spine-binder/issues")
+            if [ "$HTTP" = "201" ]; then
+              ISSUE_NUM=$(python3 -c "import json; print(json.load(open('/tmp/issue-resp.json')).get('number','?'))")
+              ISSUE_URLS="$ISSUE_URLS yks-spine-binder#${ISSUE_NUM}"
+              ISSUE_COUNT=$((ISSUE_COUNT+1))
+            else
+              echo "WARN: failed to file issue (HTTP $HTTP): $TITLE"
+            fi
+          done < <(python3 -c "import json; [print(json.dumps(c)) for c in json.load(open('/tmp/parsed/movement-3-candidates.json'))]")
+          echo "count=$ISSUE_COUNT" >> $GITHUB_OUTPUT
+          echo "urls=$ISSUE_URLS" >> $GITHUB_OUTPUT
+          echo "filed $ISSUE_COUNT future-study issues"
+
+      - name: Telegram ping — done (operator handoff)
+        if: ${{ success() }}
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLUG: ${{ inputs.slug }}
+          CURRENT: ${{ inputs.current_version }}
+          TARGET: ${{ inputs.target_version }}
+          ADDENDUM_URL: ${{ steps.addendum.outputs.url }}
+          M2: ${{ steps.parse.outputs.m2_count }}
+          M3: ${{ steps.parse.outputs.m3_count }}
+          ISSUES: ${{ steps.candidates.outputs.urls }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then exit 0; fi
+          MSG="DONE wp-framework-uplift: $SLUG draft addendum ready for review.
+
+Edna produced ${M2} retrofit insertions + ${M3} future-study candidates.
+
+DRAFT addendum: ${ADDENDUM_URL}
+Future-study issues filed: ${ISSUES}
+
+NEXT (operator-fired, Tier C): review addendum, then fire wp-level-up with transition=errata-bump to compose ${TARGET} PDF and mint Zenodo DOI."
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" -o /dev/null
+
+      - name: Telegram ping — failed
+        if: ${{ failure() }}
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLUG: ${{ inputs.slug }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then exit 0; fi
+          MSG="FAILED wp-framework-uplift: $SLUG. Inspect: $RUN_URL"
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" -o /dev/null
