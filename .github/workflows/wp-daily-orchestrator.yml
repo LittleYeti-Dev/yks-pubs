@@ -87,6 +87,7 @@ jobs:
           TRACKER: ${{ steps.queue.outputs.tracker }}
           DOI: ${{ steps.queue.outputs.doi }}
           CURRENT_VERSION: ${{ steps.queue.outputs.current_version }}
+          REASON: ${{ steps.queue.outputs.reason }}
         run: |
           set -euo pipefail
           if [ "$TRANSITION" = "pubs-mirror-only" ]; then
@@ -108,6 +109,20 @@ jobs:
               'slug': '$SLUG',
               'current_version': '$CUR',
               'target_version': '$TARGET'
+            }))")
+          elif [ "$TRANSITION" = "back-rev" ]; then
+            # NEW 2026-05-17: operator-fired rollback. Per Tier C invariant, the orchestrator
+            # only DISPATCHES the back-rev workflow; the actual decision is operator-authored
+            # via the queue entry (which the operator wrote). PDFs + Zenodo DOIs preserved.
+            # Required queue fields: slug, current_version (the live version), target_label (rollback target), reason.
+            WF="wp-back-rev.yml"
+            CUR="$CURRENT_VERSION"
+            REASON_VAL="${REASON:-operator queue-fired rollback}"
+            INPUTS=$(python3 -c "import json,os; print(json.dumps({
+              'slug': '$SLUG',
+              'from_version': '$CUR',
+              'to_version': '$TARGET',
+              'reason': '$REASON_VAL'
             }))")
           else
             WF="wp-level-up.yml"
