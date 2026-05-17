@@ -56,6 +56,21 @@ def main():
     canon = pathlib.Path(args.canon_foundations).read_text(encoding="utf-8")
     standards = pathlib.Path(args.wp_standards).read_text(encoding="utf-8")
     pdf_sha = sha256(args.paper_pdf)
+    # v2 (2026-05-17) AC-4: per-artifact SHA-256 so the §verifiable-assertions block can be
+    # checked against the inlined blocks below. The prior version asserted "canon inlined below"
+    # while inlining a literal placeholder string — Edna's 2026-05-17 bounce reason. With AC-1
+    # the canon block is now real, and these hashes make the claim machine-checkable downstream.
+    paper_md_sha = sha256(args.paper_md)
+    corpus_sha = sha256(args.doctrine_corpus)
+    canon_sha = sha256(args.canon_foundations)
+    standards_sha = sha256(args.wp_standards)
+    # Identify the substrate the source markdown came from. wp-level-up.yml v2 may pass either
+    # the spine-binder intake draft (for errata-bump / preprint-promote) or the PDF-extracted
+    # v1.0-published basis (for major-revision / peer-review-promote). The dispatch must say
+    # which substrate Edna is reading so she can decide whether Standard 4 §265 is satisfied.
+    substrate_label = ("v1.0-published PDF extract (Standard 4 substrate)"
+                       if args.paper_md.endswith("-published-basis.md")
+                       else "spine-binder intake draft (preprint/errata substrate)")
     deficit_ids = [d.strip() for d in args.deficits.split(",") if d.strip()]
     pages_gap = max(0, args.pages_required - args.pages)
 
@@ -100,11 +115,15 @@ When complete, the operator + Klaus will verify standards-pass and re-fire `wp-l
 
 ## Verifiable assertions
 
-- Paper PDF SHA-256: `{pdf_sha}`
-- Source markdown lives at: `{args.paper_md}` (inlined below)
-- WP Standards v1.1 inlined below
-- Full doctrine corpus inlined below
-- Foundational canon inlined below
+Every inlined block below has its SHA-256 stated here. Edna can re-hash any block (paste it
+into a fresh file, run `sha256sum`) and verify it matches. If a hash here does not match the
+content below, refuse — the dispatch has been tampered with or generated from inconsistent inputs.
+
+- Paper PDF SHA-256: `{pdf_sha}`  (artifact at `{args.paper_pdf}`)
+- Source markdown SHA-256: `{paper_md_sha}`  (substrate: {substrate_label}; inlined below)
+- WP Standards v1.1 SHA-256: `{standards_sha}`  (inlined below)
+- Doctrine corpus SHA-256: `{corpus_sha}`  (inlined below)
+- Foundational canon SHA-256: `{canon_sha}`  (inlined below; wp-level-up.yml v2 hard-fails if CANON.md is absent or empty, so this hash is for the real canon, never a placeholder)
 
 ---
 

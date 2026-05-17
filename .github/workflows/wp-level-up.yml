@@ -136,7 +136,7 @@ jobs:
             echo "WARNING: target file $TARGET already exists; this run will overwrite it"
           fi
 
-      - name: Clone source repos (yks-web for stamper + source_repo for manuscript)
+      - name: Clone source repos (yks-web for stamper + source_repo for manuscript + yks-canon for grounding)
         env:
           MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
           SOURCE_REPO: ${{ inputs.source_repo }}
@@ -146,6 +146,14 @@ jobs:
           git clone --depth 1 \
             "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/yks-web.git" \
             "$RUNNER_TEMP/yks-web"
+          # v2 (2026-05-17): yks-canon is now a mandatory checkout. The Edna substantive-expansion
+          # dispatch builder inlines CANON.md as "Foundational canon"; without canon present, the
+          # prior `||` fallback wrote a literal placeholder string into canon-foundations.md while
+          # the dispatch's verifiable-assertion §45 claimed the canon was present. Edna refused all
+          # 10 dispatches on 2026-05-17 for this reason. Hard-fail-on-absent is the contract now.
+          git clone --depth 1 \
+            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/yks-canon.git" \
+            "$RUNNER_TEMP/yks-canon"
           git clone --depth 1 \
             "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/${SOURCE_REPO}.git" \
             "$RUNNER_TEMP/source"
@@ -228,12 +236,40 @@ jobs:
           set -euo pipefail
           sudo apt-get install -y -qq poppler-utils >/dev/null 2>&1 || true
           pip install pyyaml --quiet
-          # Build doctrine corpus + canon + standards snapshots
-          python3 .github/scripts/build-doctrine-corpus.py             --web-content "$RUNNER_TEMP/yks-web/sites/nsq-pub/content/pubs/white-papers"             --output /tmp/doctrine-corpus.md             --exclude-slug "$SLUG" || echo "(corpus build had warnings)"
-          # Canon snapshot
+          # Build doctrine corpus + canon + standards snapshots.
+          # v2 (2026-05-17): corpus build is now strict — any failure halts the workflow rather
+          # than emitting "(corpus build had warnings)" and silently shipping a half-built corpus.
+          python3 .github/scripts/build-doctrine-corpus.py \
+            --web-content "$RUNNER_TEMP/yks-web/sites/nsq-pub/content/pubs/white-papers" \
+            --output /tmp/doctrine-corpus.md \
+            --exclude-slug "$SLUG"
+          # v2 self-check (AC-2): round-trip stability. Build the corpus a second time with
+          # identical inputs and require byte-identical output. The 2026-05-17 batch defect
+          # surfaced as title↔slug scramble that Edna believed varied per-invocation; this gate
+          # makes the determinism contract explicit and machine-checkable.
+          python3 .github/scripts/build-doctrine-corpus.py \
+            --web-content "$RUNNER_TEMP/yks-web/sites/nsq-pub/content/pubs/white-papers" \
+            --output /tmp/doctrine-corpus.recheck.md \
+            --exclude-slug "$SLUG"
+          if ! diff -q /tmp/doctrine-corpus.md /tmp/doctrine-corpus.recheck.md >/dev/null; then
+            echo "::error::build-doctrine-corpus.py is non-deterministic across two invocations with identical inputs — halting (AC-2 contract violated)."
+            diff /tmp/doctrine-corpus.md /tmp/doctrine-corpus.recheck.md | head -40
+            exit 1
+          fi
+          # Canon snapshot — v2 (2026-05-17): hard-fail on missing canon. The prior `||` fallback
+          # wrote a literal placeholder string into canon-foundations.md, which the dispatch
+          # builder then inlined under the heading "Foundational canon" while the dispatch's
+          # own verifiable-assertion §45 claimed the canon was present. That mismatch is what
+          # Edna refused 10/10 of the 2026-05-17 expansion batch on. AC-1 contract: canon present
+          # and non-empty, or the workflow halts here before staging anything.
+          CANON_PATH="$RUNNER_TEMP/yks-canon/CANON.md"
+          if [ ! -s "$CANON_PATH" ]; then
+            echo "::error::CANON.md missing or empty at $CANON_PATH — refusing to compose dispatch with placeholder canon (Edna 2026-05-17 root cause)."
+            exit 1
+          fi
           {
             echo "# yks-canon CANON.md"; echo
-            cat "$RUNNER_TEMP/yks-canon/CANON.md" 2>/dev/null || echo "(canon not checked out at runner-temp; expected when yks-canon is not a default checkout)"
+            cat "$CANON_PATH"
           } > /tmp/canon-foundations.md
           # WP Standards
           curl -s -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/LittleYeti-Dev/yks-canon/contents/governance/2026-05-17-wp-publishing-standards-v1-proposed.md?ref=main"             | python3 -c "import json,sys,base64; d=json.load(sys.stdin); open('/tmp/wp-standards.md','wb').write(base64.b64decode(d['content']))"
@@ -242,7 +278,28 @@ jobs:
           for cand in "papers/${SLUG}-v1-2-preprint.pdf" "papers/${SLUG}-v1-1-preprint.pdf" "papers/${SLUG}-v1-preprint.pdf"; do
             if [ -f "$cand" ]; then PAPER_PDF="$cand"; break; fi
           done
-          PAPER_MD="$RUNNER_TEMP/source/$SOURCE_PATH"
+          # v2 (2026-05-17) AC-3: Standard-4 substrate resolution. For major-revision and
+          # peer-review-promote, the publishing-quality basis must be the v1.0-PUBLISHED
+          # artifact, not the spine-binder intake draft (which Standard 4 §265 explicitly
+          # rejects as "NOT the publishing-quality basis"). Of Standard 4's three options:
+          #   A — yks-spine-binder/published/<slug>/<slug>-v1.0.md  (tree does not exist 2026-05-17)
+          #   B — text extracted from yks-pubs/papers/<slug>-v1-preprint.pdf via pdftotext  (chosen)
+          #   C — Stackrat compose path reproduced  (under-specified; deferred)
+          # errata-bump and preprint-promote keep the intake substrate — only the major-revision
+          # / peer-review-promote transitions need the v1.0-published basis.
+          if [ "$TRANSITION" = "major-revision" ] || [ "$TRANSITION" = "peer-review-promote" ]; then
+            if [ -z "$PAPER_PDF" ] || [ ! -f "$PAPER_PDF" ]; then
+              echo "::error::Standard-4 substrate resolution failed: transition=$TRANSITION requires a v1.0-published PDF basis at papers/${SLUG}-v1*-preprint.pdf, none found. Refusing to compose a substantive-expansion dispatch against the intake draft (Standard 4 §265 prohibition)."
+              exit 1
+            fi
+            PAPER_MD="/tmp/${SLUG}-published-basis.md"
+            pdftotext -layout "$PAPER_PDF" - \
+              | sed -e '1s/^/---\ntitle: "(extracted from v1.0-published PDF)"\nslug: '"${SLUG}"'\nsubstrate: pdf-extract\n---\n\n/' \
+              > "$PAPER_MD"
+            echo "Standard-4 substrate: extracted $(wc -c < "$PAPER_MD") chars from $PAPER_PDF -> $PAPER_MD"
+          else
+            PAPER_MD="$RUNNER_TEMP/source/$SOURCE_PATH"
+          fi
           DISPATCH_NAME="dispatch-edna-substantive-expansion-${SLUG}-$(date -u +%Y-%m-%d).md"
           DISPATCH_PATH="/tmp/$DISPATCH_NAME"
           python3 .github/scripts/build-standards-compliance-dispatch.py             --slug "$SLUG"             --current-version "$CURRENT_VERSION"             --target-version "$TARGET_VERSION"             --transition "$TRANSITION"             --pages "$PAGES"             --pages-required 25             --paper-pdf "$PAPER_PDF"             --paper-md "$PAPER_MD"             --doctrine-corpus /tmp/doctrine-corpus.md             --canon-foundations /tmp/canon-foundations.md             --wp-standards /tmp/wp-standards.md             --deficits "$DEFICITS"             --output "$DISPATCH_PATH"
