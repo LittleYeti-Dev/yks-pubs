@@ -166,6 +166,7 @@ jobs:
           ADDENDUM_PATH: ${{ inputs.addendum_path }}
           TITLE_SUFFIX: ${{ inputs.title_suffix }}
           TARGET_LABEL: ${{ inputs.target_label }}
+          SLUG: ${{ inputs.slug }}
         run: |
           set -euo pipefail
           BASE_FILE="$RUNNER_TEMP/source/$SOURCE_PATH"
@@ -194,8 +195,41 @@ jobs:
               base_fm = {}
               base_body = base_text
 
-          # Build new frontmatter — preserve author/title/canonical_url, bump version, append suffix
-          new_fm = dict(base_fm)
+          # 2026-05-17 (Yeti) — ADDITIVE-ONLY UPLIFT DOCTRINE.
+          # The spine-binder intake frontmatter is editorially thin (14 fields). The yks-web
+          # frontmatter is the published-paper Hugo frontmatter (37+ fields) including abstract,
+          # published_date, logo_path, keywords, topics — all of which the stamp-paper-pdf.py
+          # cover renderer reads. Merge web frontmatter BEFORE building new_fm so the cover
+          # restores every reader-visible block from v1.0.
+          web_fm = {}
+          slug = os.environ.get("SLUG", "")
+          if slug:
+              web_md_path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "yks-web" / "sites" / "nsq-pub" / "content" / "pubs" / "white-papers" / f"{slug}.md"
+              if web_md_path.exists():
+                  wt = web_md_path.read_text(encoding="utf-8")
+                  wm = re.match(r"---\s*\n(.*?)\n---\s*\n", wt, re.DOTALL)
+                  if wm:
+                      web_fm = yaml.safe_load(wm.group(1)) or {}
+                      print(f"merged yks-web frontmatter: {len(web_fm)} fields from {slug}.md")
+
+          # Cover-display fields from yks-web overwrite spine-binder intake on these keys.
+          # If any of these is missing from BOTH sources, halt — bare cover would violate additive doctrine.
+          COVER_FIELDS = ("abstract", "date", "published_date", "logo_path",
+                          "keywords", "topics", "orcid", "affiliation",
+                          "series", "license")
+          merged = dict(base_fm)
+          for k in COVER_FIELDS:
+              if k in web_fm:
+                  merged[k] = web_fm[k]
+          # Verify-before-relying — cover-content superset enforcement
+          REQUIRED_COVER = ("abstract", "published_date", "logo_path", "affiliation")
+          missing = [k for k in REQUIRED_COVER if k not in merged or not merged[k]]
+          if missing:
+              raise SystemExit(f"FATAL: additive-doctrine violation — required cover field(s) missing from merged frontmatter: {missing}. yks-web has {len(web_fm)} fields, spine-binder has {len(base_fm)} fields. Cover render would drop content vs prior version. Halt rather than ship.")
+
+          # Build new frontmatter from MERGED — preserve author/title/canonical_url/abstract/dates,
+          # bump version, append suffix
+          new_fm = dict(merged)
           old_title = new_fm.get("title", "Untitled")
           if title_suffix:
               new_fm["title"] = old_title + title_suffix
