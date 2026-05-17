@@ -1,3 +1,13 @@
+# DEPRECATED 2026-05-17 — superseded by wp-level-up.yml
+# wp-level-up.yml is the parametric promotion workflow that handles all 4 transitions:
+#   - errata-bump (the one this workflow does)
+#   - preprint-promote
+#   - major-revision
+#   - peer-review-promote
+# This workflow is preserved for historical reference + the 4 v1.1 errata it built earlier
+# this sprint, but new errata bumps should use wp-level-up.yml.
+# Removal scheduled: 2026-06-01 (or sooner if no operator dependency surfaces).
+
 name: compose-v11-errata — build v1.1 PDF + push to yks-pubs (auto-mints Zenodo DOI)
 
 # Composes a v1.1 errata PDF by:
