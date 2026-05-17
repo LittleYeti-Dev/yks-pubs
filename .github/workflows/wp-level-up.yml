@@ -91,7 +91,10 @@ permissions:
 
 # Serialize all level-up pushes to main so parallel-fired runs don't race on git push.
 concurrency:
-  group: wp-level-up-push
+  # Per-slug grouping so different papers can run in parallel.
+  # cancel-in-progress: false — within the same slug, a new run waits for the prior to finish
+  # (no double-compose), but different slugs proceed concurrently.
+  group: wp-level-up-${{ inputs.slug }}
   cancel-in-progress: false
 
 jobs:
