@@ -341,6 +341,85 @@ jobs:
           echo "::error::WP Standards v1.1 gate blocked $TRANSITION for $SLUG — Edna dispatch staged. Halting workflow."
           exit 1
 
+      - name: Archive prior-version PDF(s) BEFORE compose (AC-6, 2026-05-17 TM amendment 3eac3f41)
+        env:
+          SLUG: ${{ inputs.slug }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          TRACKER: ${{ inputs.tracker_issue }}
+        run: |
+          set -euo pipefail
+          # AC-6 (TM amendment 3eac3f41): copy every existing prior-version PDF for this
+          # slug into the in-repo archive tree at papers-archive/<slug>/<version-label>.pdf
+          # BEFORE the new compose step runs. Hard-fail on any archive-write failure (no
+          # silent fallback — same discipline as AC-1 canon hard-fail).
+          #
+          # Archive target chosen: (b) yks-pubs/papers-archive/<slug>/<version-label>.pdf.
+          # Rationale: (a) yks-papers-archive repo requires new deploy-key + lz-sync wiring
+          # — too heavy for a single-purpose feature; (c) yks-canon/papers-archive contradicts
+          # canon's role (governance docs, not artifact storage; flagged in the dispatch
+          # itself). (b) is the pragmatic same-repo option, deterministic path layout
+          # supports back-rev <slug> <version> lookups, and the upgrade path to (a) later is
+          # clean because the data layout is identical, just a different repo.
+          # ADR draft: yks-build/handoffs/2026-05-17/clive-wp-level-up-v2-ac6-archive-adr-draft.md
+          # Bootstrap baseline preserved at tag refs/tags/archive/pre-clive-v2-2026-05-17.
+          # Tracker: yks-pubs#6 (AC-6 issue, separate from AC-1..AC-4 at #5 closed).
+          PRIORS=$(ls papers/${SLUG}-v*.pdf 2>/dev/null || true)
+          if [ -z "$PRIORS" ]; then
+            echo "AC-6: no prior-version PDFs for $SLUG — first-time promote; archive step is a no-op."
+            exit 0
+          fi
+          mkdir -p "papers-archive/${SLUG}"
+          ARCHIVED=0
+          NEW_WRITES=0
+          for prior in $PRIORS; do
+            base=$(basename "$prior")
+            vlabel=${base#${SLUG}-}
+            vlabel=${vlabel%.pdf}
+            target="papers-archive/${SLUG}/${vlabel}.pdf"
+            if [ -f "$target" ] && cmp -s "$prior" "$target"; then
+              echo "AC-6: $target already at-content for $prior — no-op."
+              ARCHIVED=$((ARCHIVED+1))
+              continue
+            fi
+            cp "$prior" "$target"
+            [ -f "$target" ] || { echo "::error::AC-6: archive write failed for $prior -> $target"; exit 1; }
+            echo "AC-6: archived $prior -> $target ($(wc -c < "$target") bytes)"
+            ARCHIVED=$((ARCHIVED+1))
+            NEW_WRITES=$((NEW_WRITES+1))
+          done
+          echo "AC-6: $ARCHIVED prior PDF(s) reconciled, $NEW_WRITES new archive write(s)."
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "AC-6: dry_run=true — archive staged locally, not committed."
+            exit 0
+          fi
+          if [ "$NEW_WRITES" -eq 0 ]; then
+            echo "AC-6: nothing new to commit (all priors already archived at-content)."
+            exit 0
+          fi
+          # Separate commit BEFORE compose for clean audit trail.
+          git config user.name  "wp-level-up-bot"
+          git config user.email "wp-level-up-bot@yks.local"
+          git add papers-archive/
+          MSG="wp-level-up: archive ${NEW_WRITES} prior-version PDF(s) for ${SLUG} BEFORE compose (AC-6)"
+          if [ -n "$TRACKER" ]; then
+            MSG="$MSG  (tracker: $TRACKER)"
+          fi
+          git commit -m "$MSG"
+          # Race-safe push (same pattern as the post-compose commit step).
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "AC-6 archive push succeeded on attempt $attempt"; break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::AC-6: archive push failed after 3 attempts — refusing to proceed to compose"
+              exit 1
+            fi
+            echo "AC-6 push rejected (attempt $attempt) — fetch + rebase + retry"
+            git fetch origin main
+            git rebase origin/main
+            sleep $((attempt * 5))
+          done
+
       - name: Compose source markdown (transition-aware)
         env:
           TRANSITION: ${{ inputs.transition }}
