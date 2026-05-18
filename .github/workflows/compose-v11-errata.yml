@@ -84,7 +84,7 @@ concurrency:
 jobs:
   compose-and-push:
     name: Compose v1.1 errata PDF for ${{ inputs.slug }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omen, texlive]
     timeout-minutes: 15
     steps:
       - name: Checkout yks-pubs (with MESH_TOKEN so push can trigger downstream workflows)
