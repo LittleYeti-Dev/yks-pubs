@@ -31,7 +31,7 @@ concurrency:
 jobs:
   mirror-and-verify:
     name: mirror ${{ inputs.slug }} ${{ inputs.target_label }} to pubs site
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omen]
     timeout-minutes: 12
     steps:
       - name: Telegram ping — start
