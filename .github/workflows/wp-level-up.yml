@@ -100,7 +100,7 @@ concurrency:
 jobs:
   level-up:
     name: ${{ inputs.transition }} ${{ inputs.slug }} -> ${{ inputs.target_label }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omen, texlive]
     timeout-minutes: 15
     steps:
       - name: Checkout yks-pubs (MESH_TOKEN so push triggers downstream zenodo-deposit-release.yml)
