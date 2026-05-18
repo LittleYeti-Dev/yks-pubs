@@ -1,81 +1,19 @@
-# YKS Paper Maturation Queue
-#
-# The daily wp-daily-orchestrator workflow reads this file every day at 04:30 ET,
-# takes the FIRST entry (head of the queue), fires wp-level-up + wp-pubs-site-mirror
-# for that paper, Telegram-pings you start + done, and pops the entry on success.
-#
-# If `enabled: false` is set on an entry, it's skipped (operator can pause without
-# losing the entry).
-#
-# Add new entries by appending to the `queue:` list. Reordering is welcome.
-# Operator can edit this file at any time; the orchestrator reads the live state
-# from origin/main each morning.
-#
-# Currently seeded with the 4 v1.1 errata already shipped to yks-pubs/papers/ —
-# these need the pubs-site mirror step (PDF copy to yks-web + frontmatter update).
-# Once those are processed, the queue can hold Round-3 promotions, capstone-shipping,
-# preprint→peer-reviewed transitions, etc.
-
 queue:
-  - slug: hgc3ae2-at-the-degraded-edge
-    transition: pubs-mirror-only
-    target_label: v1-1-preprint
-    doi: pending
-    tracker: YKS-Spine-Binder#376
-    note: 'v1.1 errata PDF already in yks-pubs/papers/; just needs reader-facing mirror'
-
-  - slug: epistemic-constraints
-    transition: pubs-mirror-only
-    target_label: v1-1-preprint
-    doi: pending
-    tracker: YKS-Spine-Binder#312
-    note: 'v1.1 errata PDF already in yks-pubs/papers/; just needs reader-facing mirror'
-
-  - slug: classification-problem
-    transition: pubs-mirror-only
-    target_label: v1-1-preprint
-    doi: pending
-    tracker: YKS-Spine-Binder#377
-    note: 'v1.1 errata PDF already in yks-pubs/papers/; just needs reader-facing mirror'
-
-  - slug: accreditation-problem
-    transition: pubs-mirror-only
-    target_label: v1-1-preprint
-    doi: pending
-    tracker: YKS-Spine-Binder#378
-    note: 'v1.1 errata PDF already in yks-pubs/papers/; just needs reader-facing mirror'
-
-# Future entries example (uncomment to seed Round-3 EDO promotions):
-#
-#  - slug: tactical-substrate
-#    transition: errata-bump        # errata-bump | preprint-promote | major-revision | peer-review-promote | pubs-mirror-only
-#    source_repo: YKS-Spine-Binder
-#    source_path: intake/papers/tactical-substrate/tactical-substrate-v1.0-preprint-draft.md
-#    addendum_path: ''              # required for errata-bump
-#    target_label: v1-2-preprint
-#    title_suffix: ' (v1.2 errata)'
-#    tracker: ''
-#    enabled: true                  # default true; set false to skip without removing
-
-# Framework-uplift example (uncomment to fire a backward-enrichment editorial cycle):
-#
-# wp-framework-uplift fires Edna to compare the named paper against the complete
-# current doctrine, produces a v1.x errata addendum DRAFT in
-# yks-spine-binder/intake/papers/<slug>/, and files Movement 3 future-study
-# candidates as yks-spine-binder issues.
-#
-# This is NOT a canon mint. The DOI bump requires a separate errata-bump
-# transition (operator-fired) per Tier C invariant (canon-state transitions
-# must be operator-authored; persona-bot-authored mints = breach).
-#
-#  - slug: hgc3ae2-at-the-degraded-edge
-#    transition: framework-uplift
-#    current_version: v1-1-preprint    # what's currently on the pubs site
-#    target_label: v1-2-preprint       # what the draft addendum is for
-#    enabled: true
-#
-# After the framework-uplift cycle completes:
-#  1. Operator reviews the DRAFT addendum at yks-spine-binder/intake/papers/<slug>/v1-2-preprint-errata-addendum-DRAFT.md
-#  2. Operator edits as needed (or accepts as-is)
-#  3. Operator fires wp-level-up manually with transition=errata-bump to mint the v1.2 DOI
-#  4. Daily orchestrator picks up the matching pubs-mirror-only entry to publish the new PDF
+- slug: epistemic-constraints
+  transition: pubs-mirror-only
+  target_label: v1-1-preprint
+  doi: pending
+  tracker: YKS-Spine-Binder#312
+  note: v1.1 errata PDF already in yks-pubs/papers/; just needs reader-facing mirror
+- slug: classification-problem
+  transition: pubs-mirror-only
+  target_label: v1-1-preprint
+  doi: pending
+  tracker: YKS-Spine-Binder#377
+  note: v1.1 errata PDF already in yks-pubs/papers/; just needs reader-facing mirror
+- slug: accreditation-problem
+  transition: pubs-mirror-only
+  target_label: v1-1-preprint
+  doi: pending
+  tracker: YKS-Spine-Binder#378
+  note: v1.1 errata PDF already in yks-pubs/papers/; just needs reader-facing mirror
