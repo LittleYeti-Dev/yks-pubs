@@ -37,7 +37,7 @@ concurrency:
 jobs:
   fire-releases:
     name: Create GitHub Release per new PDF (Zenodo mint trigger)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omen]
     steps:
       - name: Checkout (depth 2 for diff)
         uses: actions/checkout@v4
