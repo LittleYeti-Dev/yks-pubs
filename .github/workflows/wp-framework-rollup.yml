@@ -38,7 +38,7 @@ jobs:
     name: Scrape yks-web frontmatter + compose framework-state.md
     # Only run if the upstream wp-level-up succeeded (skip on failed promotions).
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omen]
     timeout-minutes: 10
     steps:
       - name: Checkout yks-pubs
