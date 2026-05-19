@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   uplift:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omen]
     timeout-minutes: 25  # 12 min Edna wait + 8 min processing + 5 min margin
     steps:
       - name: Telegram ping — start
