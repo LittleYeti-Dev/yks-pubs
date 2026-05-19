@@ -41,7 +41,7 @@ concurrency:
 
 jobs:
   back-rev:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omen]
     timeout-minutes: 10
     steps:
       - name: Telegram ping — start
