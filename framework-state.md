@@ -1,8 +1,8 @@
 # YKS Framework State
 
-**Generated:** 2026-05-17 (auto-refresh on every wp-level-up + weekly snapshot)
+**Generated:** 2026-06-01 (auto-refresh on every wp-level-up + weekly snapshot)
 **Source:** `yks-web/sites/nsq-pub/content/pubs/white-papers/*.md` frontmatter
-**Published papers:** 43
+**Published papers:** 48
 
 This file is the canonical "everything currently published" anchor used by:
 - `wp-implications-extract.yml` — Opus synthesis when a paper matures
@@ -140,6 +140,51 @@ This file is the canonical "everything currently published" anchor used by:
 - **Keywords:** ai-governance, cybersecurity-architecture, agentic-systems, confident-misalignment, human-ai-alignment, skipjack-protocol, nist-ai-rmf, zero-trust
 
 **Abstract.** Agentic systems—artificial intelligence systems capable of multi-step reasoning, tool orchestration, contextual memory, and iterative execution—are increasingly used in dynamic workflows that extend well beyond one-shot prediction or retrieval. These systems offer substantial capability gains, but they also introduce a qualitatively distinct class of reliability failures. This paper identifies the dominant failure condition in such systems as confident misalignment, in which outputs are coherent, plausible, and authoritative while nevertheless diverging from validated reality or from the user's actual intent. Unlike conventional failures, these errors often remain silent, preserving the appearance of correctness while shifting the burden of detection onto the human operator.  This paper argues that the principal limitation of agentic systems is not insufficient intelligence, but the absence of structured alignment across governance, context, collaboration, and execution. Drawing on AI governance, human–AI interaction, human factors, public-sector AI research, neuroplasticity literature, and public guidance from NIST and the U.S. Department of Defense, it develops a structured problem set centered on context integrity failure, communication asymmetry, silent degradation, execution–design divergence, and trust erosion. It then introduces the HGC³AE² framework—Human-governed, Curated Context, Agentically Engineered and Executed—as a governance-first architecture for maintaining alignment between human authority, contextual truth, and runtime behavior. The framework is operationalized through the conceptual introduction of the Skipjack Protocol, which enforces live validation, prevents silent fallback, requires explicit uncertainty signaling, and structures reconciliation as a continuous process.  The central claim of this paper is that scalable and trustworthy agentic deployment depends less on maximizing autonomy than on embedding enforceable mechanisms that keep human intent, contextual truth, and system execution synchronized over time.
+
+---
+
+## Series: AI on the Degraded Edge
+
+### RF Skip Jack — Mission-State Custody Across Intermittent Links
+
+- **Slug:** `rf-skipjack`
+- **Version:** 0.3-preprint
+- **Published:** 2026-05-28
+- **DOI:** [pending-zenodo-mint](https://doi.org/pending-zenodo-mint)
+- **URL:** https://nonsequitur.tech/pubs/white-papers/rf-skipjack/
+- **Keywords:** degraded-link operations, intermittent connectivity, mission-state custody, race condition, deterministic AI orchestration, above-L7 transport, governed autonomy, delay-tolerant networking, persona-decomposed agents, redundant out-of-band channel, structural availability
+
+**Abstract.** Operational environments characterized by intermittent, low-bandwidth, high-latency, and contended links between edge-collection / edge-execution nodes and a converging mission-state authority create a class of race conditions that existing transport-layer products, file-transfer protocols, and battle-management systems do not adequately address. This paper formalizes that race-condition class across seven distinct race types, specifies a complementary eleven-capability envelope that any solution must realize, and presents an above-Layer-7 orchestration pattern using deterministic persona-decomposed agents under a human governance and curation framework (HGC³AE²) as one realization. v0.3 adds a structural-availability capability — an encrypted, independent back-channel running in parallel to the primary mission-state link, used for control-plane sync between substrate sites and for heavily-degraded data-plane fallback under primary-link failure. v0.2 introduced the deterministic-orchestration-substrate shift with four substrate-defining sections (deterministic persona contracts, custody object model, governance-state arbitration, freshness-aware mission semantics) and patentability-preserving disclosure boundaries.
+
+---
+
+## Series: Cyber Governance for Emergent Stacks
+
+### Cyber Governance in Emergent Stacks
+
+- **Slug:** `cyber-governance-emergent-stacks-p1`
+- **Version:** 0.1-preprint
+- **Published:** 2026-05-26
+- **DOI:** [pending-zenodo-mint](https://doi.org/pending-zenodo-mint)
+- **URL:** https://nonsequitur.tech/pubs/white-papers/cyber-governance-emergent-stacks-p1/
+- **Keywords:** cyber-governance-emergent-stacks-p1, agentic-ai, governance, yks
+
+**Abstract.** The vignette in §1 is not anomalous. It is the *typical case* of how emergent AI systems fail in deployment: the conventional cyber posture reports green and the system fails anyway, because the failure mode lives outside the surfaces conventional cyber protects. This section unpacks the mechanism — the *why* of the gap — and in doing so it identifies the structural features of emergent AI systems that demand an expanded protection domain. Conventional cyber, as codified across NIST SP 800-53, ISO/IEC 27001, NIST CSF 2.0, FIPS publications, and the operational corpus of two decades of enterprise security engineering [VERIFY: cite NIST CSF 2.0; NIST SP 800-53 Rev. 5; ISO/IEC 27001:2022; Bishop 2018 textbook *Computer Security: Art and Science*], protects a well-defined set of asset classes against a well-defined set of failure modes. The asset classes are (canonically): data, identities, systems, networks, applications, and the supply chains that produce all of the above. The failure modes are (canonically): unauthorized disclosure (confidentiality breach), unauthorized modification (integrity breach), unavailability (availability breach), and — in mature frames — unauthorized authentication, unauthorized authorization, and unauthorized non-repudiation.
+
+---
+
+## Series: Governed Autonomy
+
+### The Autonomy Problem
+
+- **Slug:** `governed-autonomy-p1`
+- **Version:** 0.1-preprint
+- **Published:** 2026-05-26
+- **DOI:** [pending-zenodo-mint](https://doi.org/pending-zenodo-mint)
+- **URL:** https://nonsequitur.tech/pubs/white-papers/governed-autonomy-p1/
+- **Keywords:** governed-autonomy-p1, agentic-ai, governance, yks
+
+**Abstract.** --- series: governed-autonomy paper: P1 — The Autonomy Problem version: v0.1-seed author: Edna (Tier-A first pass) status: PRE-GATE-SEED — not for promote gate-state: | This v0.1-seed is delivered BELOW the series' inheritance gate (series seed §3, strict gate per feedback_load_bearing_series_inheritance). Promote past v0.1-seed REQUIRES: (a) foundational canon at v1.0-canonical (AI Gov / MAO / EDO / IH Theory / Cyber Pillar); (b) #348 Cyber Governance in Emergent Stacks at preprint-complete or canonical; (c) Klaus citation-honesty audit clears all [VERIFY:] markers; (d) Cowork sourcing pass closes the chain-of-evidence on every [INHERIT-PENDING:] reference; (e) two-key promote: TM-shape + Klaus-citation + Edna-editorial. This artifact is a scaffolding seed: it establishes structure, vocabulary, and the forward map. It is not a draft, and it is not promote-ready. target-length: 25pp / ~10,000 words at NSQ formatting (seed delivers structural scaffold + load-bearing prose; full prose buildout deferred to post-gate draft pass) load-bearing-citations: ≥10 peer-reviewed required at promote; v0.1-seed enumerates citation slots with [VERIFY:] markers ---
 
 ---
 
@@ -296,6 +341,21 @@ This file is the canonical "everything currently published" anchor used by:
 
 ---
 
+## Series: Intent Preservation
+
+### The Intent Preservation Problem
+
+- **Slug:** `intent-preservation-p1`
+- **Version:** 0.1-preprint
+- **Published:** 2026-05-26
+- **DOI:** [pending-zenodo-mint](https://doi.org/pending-zenodo-mint)
+- **URL:** https://nonsequitur.tech/pubs/white-papers/intent-preservation-p1/
+- **Keywords:** intent-preservation-p1, agentic-ai, governance, yks
+
+**Abstract.** **Series:** Intent Preservation — P1 (frame paper) **Version:** v0.1-seed **Author:** Edna (YKS authorship) **Status:** Tier-A first-pass draft. All external citations carry `[VERIFY:]` markers pending Cowork sourcing pass and Klaus citation-honesty audit. Late one evening an operator types a single line into a working interface: *"Move the deployment to the staging environment first; do not touch production until I confirm the staging result."* The system acknowledges. Twelve minutes later, production is updated. Staging was untouched. Nothing crashed. No error was returned. No log carried a red flag. The operator's words were captured cleanly, transmitted intact, and stored verbatim in a journal the system can reproduce on demand. Every byte of the original message is still recoverable. And yet the thing the operator meant to happen did not happen, and the thing the operator explicitly forbade did happen. This is not a transcription failure. The text is fine. This is not a representation failure — every word still means what it meant when it was typed. This is not an authorization failure — the operator was authorized to make the change and the system was authorized to execute it. This is something else. The *intent* — the operator's authored declaration of what should happen and what should not — was lost somewhere between the keyboard and the deployment runner. The text survived; the intent did not.
+
+---
+
 ## Series: Managing Agentics Ops
 
 ### Security and Provenance for Self-Hosted Agentic Systems
@@ -425,6 +485,21 @@ This file is the canonical "everything currently published" anchor used by:
 - **Keywords:** managing-agentics-ops, agentic-operations, ai-governance
 
 **Abstract.** Production agentic systems exhibit two operationally distinct drift patterns that conventional QA does not detect: operator-trust drift (the harness reports work done while no artifact moves) and output-mode drift (the harness produces the same output mode regardless of variation in the prompt). Both fail invisibly because the verification primitive lives inside the harness's self-knowledge.  This is Paper 4 of the *Managing Agentics Ops* decalogy.
+
+---
+
+## Series: Semantic Integrity
+
+### The Semantic-Integrity Problem
+
+- **Slug:** `semantic-integrity-p1`
+- **Version:** 0.1-preprint
+- **Published:** 2026-05-26
+- **DOI:** [pending-zenodo-mint](https://doi.org/pending-zenodo-mint)
+- **URL:** https://nonsequitur.tech/pubs/white-papers/semantic-integrity-p1/
+- **Keywords:** semantic-integrity-p1, agentic-ai, governance, yks
+
+**Abstract.** Take a sentence. Any sentence — but let's pick one that *means* something specific: Run it through a modern embedding model. You get a vector — a list of numbers, somewhere between 384 and 4,096 dimensions depending on which model you picked. That vector is, in a meaningful sense, what your downstream systems will treat *as* the sentence from this point forward. A nearest-neighbor search retrieves it. A reranker scores it. A generative model conditions on it. A RAG pipeline returns it as evidence. Now do the inverse. Take that vector and ask a competent generation model to reconstruct the sentence it came from. You will not get your sentence back. You will get something *close*. You might get: Or: Or — and this is the failure case that matters — you might get: Three reconstructions, three different *meanings*. The first preserved temporal order but lost the countersignature detail (countersignature implies a multi-party document; "signing" implies a single signer). The second preserved logical structure but elevated register in a way that masks the original speaker's voice. The third reversed the temporal order entirely. From the embedding's perspective, all three are reasonable neighborhoods. From the original speaker's perspective, the third is a lie.
 
 ---
 
