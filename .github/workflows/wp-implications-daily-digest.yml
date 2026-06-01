@@ -100,8 +100,11 @@ jobs:
               out.append(f"## Per-paper implications ({count} files)")
               out.append("")
               for f in files:
+                  f = f.strip()
+                  if not f:
+                      continue
                   fpath = pathlib.Path(f)
-                  if not fpath.exists():
+                  if not fpath.is_file():
                       continue
                   content = fpath.read_text(encoding="utf-8")
                   title_match = re.search(r"^# ([^\n]+)", content, re.MULTILINE)
