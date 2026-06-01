@@ -177,7 +177,7 @@ jobs:
           test -f "$NEW_PAPER" || { echo "FATAL: source paper not found"; exit 1; }
           test -f framework-state.md || { echo "FATAL: framework-state.md not found; run wp-framework-rollup first"; exit 1; }
 
-          python3 -m pip install --quiet anthropic
+          python3 -m pip install --break-system-packages --quiet anthropic
           python3 <<PY
           import os, json, pathlib
           import anthropic
