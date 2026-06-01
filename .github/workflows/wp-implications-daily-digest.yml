@@ -191,13 +191,25 @@ jobs:
           Auto-filed by wp-implications-daily-digest.yml (cron 04:30 UTC). Closes when reviewed.
           EOF
           )
-          curl -s -X POST \
-            -H "Authorization: Bearer $MESH_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$(python3 -c "import json,os; print(json.dumps({
-              'title': f'[REVIEW] WP implications digest — {os.environ[\"DATE\"]} ({os.environ[\"COUNT\"]} papers)',
-              'body': open('/dev/stdin').read() if False else os.environ.get('PRE_BODY', open('/proc/self/fd/0').read()),
-              'labels': ['at:yeti', 'kind:review', 'area:wp-implications']
-            }))" <<< "$BODY")" \
-            "https://api.github.com/repos/LittleYeti-Dev/yks-ops-hub/issues" \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(f"  filed at-yeti issue: {d.get(\"html_url\",\"err: \"+d.get(\"message\",\"?\"))}")'
+          export BODY
+          python3 <<'PYEOF'
+          import json, os, urllib.request, urllib.error
+          payload = {
+              "title": f"[REVIEW] WP implications digest \u2014 {os.environ['DATE']} ({os.environ['COUNT']} papers)",
+              "body": os.environ.get("BODY", ""),
+              "labels": ["at:yeti", "kind:review", "area:wp-implications"],
+          }
+          req = urllib.request.Request(
+              "https://api.github.com/repos/LittleYeti-Dev/yks-ops-hub/issues",
+              data=json.dumps(payload).encode(),
+              headers={"Authorization": "Bearer " + os.environ["MESH_TOKEN"],
+                       "User-Agent": "wp-implications-digest",
+                       "Accept": "application/vnd.github+json"},
+              method="POST")
+          try:
+              d = json.load(urllib.request.urlopen(req, timeout=30))
+              print("  filed at-yeti issue:", d.get("html_url"))
+          except urllib.error.HTTPError as e:
+              print("  ISSUE FILE FAILED:", e.code, e.read().decode()[:300])
+              raise
+          PYEOF
