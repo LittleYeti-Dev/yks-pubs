@@ -56,7 +56,7 @@ jobs:
             "$RUNNER_TEMP/yks-web"
 
       - name: Install python deps
-        run: python3 -m pip install --quiet pyyaml
+        run: python3 -m pip install --quiet --break-system-packages pyyaml
 
       - name: Compose framework-state.md from yks-web frontmatter
         run: |
