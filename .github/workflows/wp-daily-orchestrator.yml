@@ -41,7 +41,7 @@ jobs:
             echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --break-system-packages --quiet pyyaml
           python3 .github/scripts/orchestrator-pop-head.py > /tmp/head.json
           if [ ! -s /tmp/head.json ]; then
             echo "queue empty or no enabled entries; orchestrator idles today"
