@@ -86,7 +86,7 @@ jobs:
           REASON: ${{ inputs.reason }}
         run: |
           set -euo pipefail
-          pip install pyyaml --quiet
+          pip install --break-system-packages pyyaml --quiet
           python3 <<'PY'
           import os, re, yaml, pathlib
           slug = os.environ["SLUG"]
