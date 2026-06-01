@@ -121,7 +121,7 @@ jobs:
             pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra \
             texlive-latex-recommended texlive-latex-extra \
             lmodern
-          python3 -m pip install --quiet reportlab pypdf pyyaml
+          python3 -m pip install --break-system-packages --quiet reportlab pypdf pyyaml
 
       - name: Compose combined markdown (base + addendum appendix)
         env:
