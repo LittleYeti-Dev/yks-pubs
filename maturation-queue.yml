@@ -1,7 +1,1 @@
-queue:
-- slug: accreditation-problem
-  transition: pubs-mirror-only
-  target_label: v1-1-preprint
-  doi: pending
-  tracker: YKS-Spine-Binder#378
-  note: v1.1 errata PDF already in yks-pubs/papers/; just needs reader-facing mirror
+queue: []
