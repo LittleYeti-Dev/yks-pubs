@@ -1,8 +1,8 @@
 # YKS Framework State
 
-**Generated:** 2026-06-01 (auto-refresh on every wp-level-up + weekly snapshot)
+**Generated:** 2026-06-07 (auto-refresh on every wp-level-up + weekly snapshot)
 **Source:** `yks-web/sites/nsq-pub/content/pubs/white-papers/*.md` frontmatter
-**Published papers:** 48
+**Published papers:** 49
 
 This file is the canonical "everything currently published" anchor used by:
 - `wp-implications-extract.yml` — Opus synthesis when a paper matures
@@ -500,6 +500,20 @@ This file is the canonical "everything currently published" anchor used by:
 - **Keywords:** semantic-integrity-p1, agentic-ai, governance, yks
 
 **Abstract.** Take a sentence. Any sentence — but let's pick one that *means* something specific: Run it through a modern embedding model. You get a vector — a list of numbers, somewhere between 384 and 4,096 dimensions depending on which model you picked. That vector is, in a meaningful sense, what your downstream systems will treat *as* the sentence from this point forward. A nearest-neighbor search retrieves it. A reranker scores it. A generative model conditions on it. A RAG pipeline returns it as evidence. Now do the inverse. Take that vector and ask a competent generation model to reconstruct the sentence it came from. You will not get your sentence back. You will get something *close*. You might get: Or: Or — and this is the failure case that matters — you might get: Three reconstructions, three different *meanings*. The first preserved temporal order but lost the countersignature detail (countersignature implies a multi-party document; "signing" implies a single signer). The second preserved logical structure but elevated register in a way that masks the original speaker's voice. The third reversed the temporal order entirely. From the embedding's perspective, all three are reasonable neighborhoods. From the original speaker's perspective, the third is a lie.
+
+---
+
+## Series: The Implications of Autonomy
+
+### The Evidence Catalogue: Ten Failure Patterns from Production Agentic Operations
+
+- **Slug:** `evidence-catalogue`
+- **Version:** 1.0-preprint
+- **Published:** 2026-06-06
+- **URL:** https://nonsequitur.tech/white-papers/evidence-catalogue/
+- **Keywords:** ai-governance, agentic-systems, intent-horizon, silent-degradation, confident-misalignment, production-evidence, human-factors, distributed-systems
+
+**Abstract.** The taxonomy of agentic failure is already published. The NSQ problem series — *The Autonomy Problem*, *The Intent Preservation Problem*, *The Semantic-Integrity Problem*, *The State Coherence Problem*, and *The Orchestration Problem* (Kuiper, 2026) — together with *Confident Misalignment, Horizon-Framed* and *Silent Fallback as a Denial-of-Validation Attack* (Kuiper, 2026), established the structural failure classes for autonomous mesh operation. What the taxonomy has not yet supplied is primary evidence: the actual incidents from a production agentic mesh that instantiate each class, described with enough specificity to confirm that the failures are operational, recurring, and not theoretical. This paper supplies that evidence. Ten failure patterns are described — silent degradation, the witness-inside-the-system problem, stale-state rot, snapshot-versus-live confusion, single-point substrate fragility, credential fan-out incompleteness, derived-state drift, execution-design divergence, confident misalignment, and trust erosion — each grounded in a real incident from production operations, de-identified to roles and mechanisms per corpus policy. Each incident is then generalized to its failure class, corroborated against peer-reviewed literature in human factors, distributed systems, and AI governance, and mapped to its rupture point on the intent horizon (Kuiper, 2026). The intent horizon — the semantic distance human intent must travel from origination to machine execution — provides the unifying analytic spine: every failure catalogued here is a point at which that journey breaks.
 
 ---
 
