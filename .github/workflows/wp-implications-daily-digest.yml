@@ -193,23 +193,35 @@ jobs:
           )
           export BODY
           python3 <<'PYEOF'
-          import json, os, urllib.request, urllib.error
-          payload = {
-              "title": f"[REVIEW] WP implications digest \u2014 {os.environ['DATE']} ({os.environ['COUNT']} papers)",
-              "body": os.environ.get("BODY", ""),
-              "labels": ["at:yeti", "kind:review", "area:wp-implications"],
-          }
-          req = urllib.request.Request(
-              "https://api.github.com/repos/LittleYeti-Dev/yks-ops-hub/issues",
-              data=json.dumps(payload).encode(),
-              headers={"Authorization": "Bearer " + os.environ["MESH_TOKEN"],
-                       "User-Agent": "wp-implications-digest",
-                       "Accept": "application/vnd.github+json"},
-              method="POST")
+          import json, os, urllib.request, urllib.error, urllib.parse, datetime
+          # 2026-06-11 operator-directed: ONE rolling review issue per ISO week, daily digests
+          # append as comments. The per-day at:yeti issue pattern built a 12-issue stale pileup.
+          HDR = {"Authorization": "Bearer " + os.environ["MESH_TOKEN"],
+                 "User-Agent": "wp-implications-digest",
+                 "Accept": "application/vnd.github+json"}
+          year, week, _ = datetime.date.fromisoformat(os.environ["DATE"]).isocalendar()
+          wk_title = f"[REVIEW] WP implications digest \u2014 {year}-W{week:02d} (weekly rollup)"
+          q = urllib.parse.quote(f'repo:LittleYeti-Dev/yks-ops-hub is:issue is:open in:title "{year}-W{week:02d} (weekly rollup)"')
+          req = urllib.request.Request(f"https://api.github.com/search/issues?q={q}", headers=HDR)
+          existing = None
           try:
+              items = json.load(urllib.request.urlopen(req, timeout=30)).get("items", [])
+              existing = items[0] if items else None
+          except Exception:
+              pass
+          day_block = f"## {os.environ['DATE']} ({os.environ['COUNT']} papers)\n\n" + os.environ.get("BODY", "")
+          if existing:
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/LittleYeti-Dev/yks-ops-hub/issues/{existing['number']}/comments",
+                  data=json.dumps({"body": day_block}).encode(), headers=HDR, method="POST")
               d = json.load(urllib.request.urlopen(req, timeout=30))
-              print("  filed at-yeti issue:", d.get("html_url"))
-          except urllib.error.HTTPError as e:
-              print("  ISSUE FILE FAILED:", e.code, e.read().decode()[:300])
-              raise
+              print("  appended to weekly rollup:", existing["html_url"])
+          else:
+              payload = {"title": wk_title, "body": day_block,
+                         "labels": ["at:yeti", "kind:review", "area:wp-implications"]}
+              req = urllib.request.Request(
+                  "https://api.github.com/repos/LittleYeti-Dev/yks-ops-hub/issues",
+                  data=json.dumps(payload).encode(), headers=HDR, method="POST")
+              d = json.load(urllib.request.urlopen(req, timeout=30))
+              print("  opened weekly rollup:", d.get("html_url"))
           PYEOF
