@@ -1,6 +1,6 @@
 # Daily Implications Digest — 2026-06-13
 
-**Generated:** 2026-06-13T09:07:19.701028Z by wp-implications-daily-digest.yml
+**Generated:** 2026-06-13T09:38:18.254759Z by wp-implications-daily-digest.yml
 **Lookback window:** 24h
 **Implications files surfaced:** 1
 
