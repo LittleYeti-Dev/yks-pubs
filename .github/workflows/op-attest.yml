@@ -1,0 +1,78 @@
+name: op-attest
+
+# Per-repo attestation (#913, corrected). On every yks-content workflow completion,
+# append a raw run event to THIS repo's own telemetry/breadcrumbs trail, using the
+# default GITHUB_TOKEN (own-repo write only). No cross-repo access, no broad secret —
+# respects the mesh function-scoped doctrine. op_id is left null; the central
+# aggregator (#928, on ops-hub, which holds the manifest + access) resolves it.
+
+on:
+  workflow_run:
+    workflows: ['*']
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: op-attest-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  attest:
+    if: github.event.workflow_run.name != 'op-attest'
+    runs-on: [self-hosted, omen]
+    timeout-minutes: 3
+    steps:
+      - name: Append raw run event to own trail (Contents API, own repo)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWN_REPO: ${{ github.repository }}
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          python3 - <<'PY'
+          import os, json, base64, urllib.request, urllib.error, datetime, uuid, time
+          REPO = os.environ["OWN_REPO"]; TOK = os.environ.get("GH_TOKEN", "")
+          def api(method, path, body=None):
+              r = urllib.request.Request("https://api.github.com" + path, method=method,
+                  data=(json.dumps(body).encode() if body is not None else None),
+                  headers={"Authorization": f"Bearer {TOK}", "Accept": "application/vnd.github+json", "User-Agent": "op-attest"})
+              try:
+                  with urllib.request.urlopen(r, timeout=20) as x:
+                      return x.status, json.load(x)
+              except urllib.error.HTTPError as e:
+                  try: return e.code, json.loads(e.read() or b"{}")
+                  except Exception: return e.code, {}
+          concl = os.environ.get("RUN_CONCLUSION") or "?"
+          ev = {"event_type": "workflow.run.complete", "op_id": None, "repo": REPO,
+                "workflow": os.environ.get("RUN_NAME", "?"), "persona": "aria",
+                "severity": ("warning" if concl in ("failure", "cancelled", "timed_out") else "info"),
+                "state": "done", "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "correlation_id": str(uuid.uuid4()), "causation_id": None,
+                "payload": {"conclusion": concl, "run_id": os.environ.get("RUN_ID")}, "schema_version": "1.0.0"}
+          line = json.dumps(ev, ensure_ascii=False) + "\n"
+          today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+          path = f"telemetry/breadcrumbs/{today}.jsonl"
+          for attempt in range(4):
+              st, cur = api("GET", f"/repos/{REPO}/contents/{path}")
+              if st == 200:
+                  content = base64.b64decode(cur["content"]).decode() + line; sha = cur["sha"]
+              elif st == 404:
+                  content, sha = line, None
+              else:
+                  print("GET", st); time.sleep(1 + attempt); continue
+              body = {"message": f"breadcrumb: {os.environ.get('RUN_NAME')} {concl}",
+                      "content": base64.b64encode(content.encode()).decode(),
+                      "committer": {"name": "Breadcrumb Emitter", "email": "breadcrumb@yks.local"}}
+              if sha: body["sha"] = sha
+              st2, _ = api("PUT", f"/repos/{REPO}/contents/{path}", body)
+              if st2 in (200, 201):
+                  print(f"attested {os.environ.get('RUN_NAME')} ({concl}) to own trail"); break
+              if st2 == 409:
+                  time.sleep(1 + attempt); continue
+              print("PUT", st2); time.sleep(1)
+          else:
+              raise SystemExit("op-attest: could not write own trail")
+          PY
