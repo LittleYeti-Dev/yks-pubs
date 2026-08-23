@@ -1,4 +1,4 @@
-name: wp-level-up — mature a paper to its next level (Zenodo DOI auto-mints downstream)
+name: wp-level-up — mature a paper to its next level (operator-gated release)
 
 # Generic paper-promotion workflow. Picks up where compose-v11-errata.yml left off,
 # parametric on transition_type so the same backbone handles every level-up shape:
@@ -14,14 +14,15 @@ name: wp-level-up — mature a paper to its next level (Zenodo DOI auto-mints do
 #   3. Compile to PDF via pandoc + xelatex.
 #   4. Stamp cover + footer + XMP via yks-web/scripts/stamp-paper-pdf.py.
 #   5. Push to yks-pubs/papers/<slug>-<target_label>.pdf using MESH_TOKEN.
-#   6. zenodo-deposit-release.yml auto-fires on the PDF push -> GitHub Release ->
-#      Zenodo's GitHub OAuth integration mints a DOI.
+#   6. Stop after the controlled PDF push. A separate, explicit operator-approved
+#      release intent is required before zenodo-deposit-release.yml can create a
+#      GitHub Release and trigger Zenodo DOI minting.
 #
 # Adopted 2026-05-17, supersedes compose-v11-errata.yml (which becomes a legacy alias
 # for the errata-bump transition).
 #
 # Pubs-site selection UX: today the operator picks a slug from
-# https://nonsequitur.tech/pubs/white-papers/ (or yks-pubs/papers/) and fires this
+# https://nonsequitur.tech/white-papers/ (or yks-pubs/papers/) and fires this
 # workflow via Actions UI workflow_dispatch. Future integration with the Yeti UI
 # dashboard (yks-execution#171 + the §12 errata-drift surface) will add a "Level Up"
 # button per paper that fires this workflow with the slug pre-filled.
@@ -29,6 +30,10 @@ name: wp-level-up — mature a paper to its next level (Zenodo DOI auto-mints do
 on:
   workflow_dispatch:
     inputs:
+      paper_id:
+        description: 'PAPYRUS paper ID (for example PAP-SJCE-001)'
+        required: true
+        type: string
       slug:
         description: 'Paper slug (e.g. hgc3ae2-at-the-degraded-edge). Must match the canonical slug used on the pubs site.'
         required: true
@@ -43,10 +48,10 @@ on:
           - major-revision
           - peer-review-promote
       source_repo:
-        description: 'Repo containing the source markdown'
+        description: 'PAPYRUS source repository; other surfaces use reconciliation, not publishing authority'
         required: true
         type: string
-        default: 'YKS-Spine-Binder'
+        default: 'papyrus-factory-recurring'
       source_path:
         description: 'Path to source markdown inside source_repo (this becomes the body of the new PDF)'
         required: true
@@ -55,7 +60,7 @@ on:
         description: 'Repo containing the addendum (errata-bump only; leave default otherwise)'
         required: false
         type: string
-        default: 'YKS-Spine-Binder'
+        default: 'papyrus-factory-recurring'
       addendum_path:
         description: 'Path to addendum markdown (errata-bump only; leave blank for other transitions)'
         required: false
@@ -100,28 +105,61 @@ concurrency:
 jobs:
   level-up:
     name: ${{ inputs.transition }} ${{ inputs.slug }} -> ${{ inputs.target_label }}
-    runs-on: [self-hosted, omen, texlive]
-    timeout-minutes: 15
+    # The only repository-scoped Omen runner is offline and no Praeceptor
+    # runner is registered. Use a reproducible hosted image until the replacement
+    # runner is connected and separately qualified.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - name: Checkout yks-pubs (MESH_TOKEN so push triggers downstream zenodo-deposit-release.yml)
-        uses: actions/checkout@v4
+      - name: Checkout yks-pubs (MESH_TOKEN for controlled archive writes)
+        uses: actions/checkout@v6
         with:
           token: ${{ secrets.MESH_TOKEN }}
 
       - name: Validate inputs + check current pubs state
         env:
+          PAPER_ID: ${{ inputs.paper_id }}
           SLUG: ${{ inputs.slug }}
           TRANSITION: ${{ inputs.transition }}
           TARGET_LABEL: ${{ inputs.target_label }}
+          SOURCE_PATH: ${{ inputs.source_path }}
           ADDENDUM_PATH: ${{ inputs.addendum_path }}
         run: |
           set -euo pipefail
           echo "=== wp-level-up dispatch ==="
+          echo "  paper_id:     $PAPER_ID"
           echo "  slug:         $SLUG"
           echo "  transition:   $TRANSITION"
           echo "  target_label: $TARGET_LABEL"
           echo "  addendum:     ${ADDENDUM_PATH:-(none)}"
           echo
+          if ! [[ "$PAPER_ID" =~ ^[A-Z0-9]+(-[A-Z0-9]+)+$ ]]; then
+            echo "FATAL: invalid PAPYRUS paper_id: $PAPER_ID"
+            exit 1
+          fi
+          if ! [[ "$SLUG" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "FATAL: invalid canonical slug: $SLUG"
+            exit 1
+          fi
+          if ! [[ "$TARGET_LABEL" =~ ^v[0-9]+([.-][0-9]+)*(-[a-z0-9]+)*$ ]]; then
+            echo "FATAL: invalid target version label: $TARGET_LABEL"
+            exit 1
+          fi
+          case "$SOURCE_PATH" in
+            /*|../*|*/../*|*/..) echo "FATAL: source_path must be a bounded relative path"; exit 1 ;;
+          esac
+          case "$ADDENDUM_PATH" in
+            /*|../*|*/../*|*/..) echo "FATAL: addendum_path must be a bounded relative path"; exit 1 ;;
+          esac
+          if [ "${{ inputs.source_repo }}" != "papyrus-factory-recurring" ]; then
+            echo "FATAL: source_repo must be papyrus-factory-recurring for a new version build"
+            echo "Existing publications from another surface must use wp-reconcile-existing-publication.yml"
+            exit 1
+          fi
+          if [ "${{ inputs.addendum_repo }}" != "papyrus-factory-recurring" ]; then
+            echo "FATAL: addendum_repo must be papyrus-factory-recurring"
+            exit 1
+          fi
           if [ "$TRANSITION" = "errata-bump" ] && [ -z "$ADDENDUM_PATH" ]; then
             echo "FATAL: errata-bump requires addendum_path"; exit 1
           fi
@@ -133,7 +171,9 @@ jobs:
           ls -1 "papers/" | grep "^${SLUG}-" || echo "  (no existing PDFs for this slug)"
           TARGET="papers/${SLUG}-${TARGET_LABEL}.pdf"
           if [ -f "$TARGET" ]; then
-            echo "WARNING: target file $TARGET already exists; this run will overwrite it"
+            echo "::error::target file $TARGET already exists — refusing to overwrite an identified publication artifact"
+            echo "Use a new version label, or run the governed reconciliation/back-rev process."
+            exit 1
           fi
 
       - name: Clone source repos (yks-web for stamper + source_repo for manuscript + yks-canon for grounding)
@@ -144,7 +184,7 @@ jobs:
         run: |
           set -euo pipefail
           git clone --depth 1 \
-            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/yks-web.git" \
+            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/yks1.0-web.git" \
             "$RUNNER_TEMP/yks-web"
           # v2 (2026-05-17): yks-canon is now a mandatory checkout. The Edna substantive-expansion
           # dispatch builder inlines CANON.md as "Foundational canon"; without canon present, the
@@ -152,7 +192,7 @@ jobs:
           # the dispatch's verifiable-assertion §45 claimed the canon was present. Edna refused all
           # 10 dispatches on 2026-05-17 for this reason. Hard-fail-on-absent is the contract now.
           git clone --depth 1 \
-            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/yks-canon.git" \
+            "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/yks1.0-canon.git" \
             "$RUNNER_TEMP/yks-canon"
           git clone --depth 1 \
             "https://x-access-token:${MESH_TOKEN}@github.com/LittleYeti-Dev/${SOURCE_REPO}.git" \
@@ -171,7 +211,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra \
-            texlive-latex-recommended texlive-latex-extra lmodern
+            texlive-latex-recommended texlive-latex-extra lmodern poppler-utils
           python3 -m pip install --break-system-packages --quiet reportlab pypdf pyyaml
 
       - name: WP Standards v1.1 compliance gate (2026-05-17 — major-revision MUST pass; minor bumps verify but warn)
@@ -182,7 +222,6 @@ jobs:
           SLUG: ${{ inputs.slug }}
           CURRENT_VERSION: ${{ inputs.current_version }}
           TARGET_LABEL: ${{ inputs.target_label }}
-          GH_TOKEN: ${{ secrets.MESH_TOKEN }}
         run: |
           set -euo pipefail
           # Find the current PDF (use prior major's preprint by default)
@@ -271,8 +310,12 @@ jobs:
             echo "# yks-canon CANON.md"; echo
             cat "$CANON_PATH"
           } > /tmp/canon-foundations.md
-          # WP Standards
-          curl -s -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/LittleYeti-Dev/yks-canon/contents/governance/2026-05-17-wp-publishing-standards-v1-proposed.md?ref=main"             | python3 -c "import json,sys,base64; d=json.load(sys.stdin); open('/tmp/wp-standards.md','wb').write(base64.b64decode(d['content']))"
+          # WP Standards — read the current governed file from the exact Canon
+          # checkout already bound to this run. The legacy proposed-file API path
+          # was removed and caused the dispatch builder to fail.
+          WP_STANDARD="$RUNNER_TEMP/yks-canon/governance/governance-wp-publishing-standards-v1.1.md"
+          test -s "$WP_STANDARD" || { echo "::error::current WP standard missing: $WP_STANDARD"; exit 1; }
+          cp "$WP_STANDARD" /tmp/wp-standards.md
           # Locate current paper PDF + md
           PAPER_PDF=""
           for cand in "papers/${SLUG}-v1-2-preprint.pdf" "papers/${SLUG}-v1-1-preprint.pdf" "papers/${SLUG}-v1-preprint.pdf"; do
@@ -573,25 +616,84 @@ jobs:
             --out "$OUT"
           echo "stamped PDF: $OUT  size: $(stat -c%s $OUT) bytes  sha256: $(sha256sum $OUT | awk '{print $1}')"
 
+      - name: Emit source-bound PAPYRUS build receipt
+        id: build_receipt
+        env:
+          PAPER_ID: ${{ inputs.paper_id }}
+          SLUG: ${{ inputs.slug }}
+          TRANSITION: ${{ inputs.transition }}
+          TARGET_LABEL: ${{ inputs.target_label }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          SOURCE_PATH: ${{ inputs.source_path }}
+          ADDENDUM_REPO: ${{ inputs.addendum_repo }}
+          ADDENDUM_PATH: ${{ inputs.addendum_path }}
+          TRACKER: ${{ inputs.tracker_issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          RECEIPT="records/builds/${PAPER_ID}/${TARGET_LABEL}/${GITHUB_RUN_ID}.json"
+          mkdir -p "$(dirname "$RECEIPT")"
+          SOURCE_FILE="$RUNNER_TEMP/source/$SOURCE_PATH"
+          SOURCE_COMMIT=$(git -C "$RUNNER_TEMP/source" rev-parse HEAD)
+          CANON_COMMIT=$(git -C "$RUNNER_TEMP/yks-canon" rev-parse HEAD)
+          WEBSITE_COMMIT=$(git -C "$RUNNER_TEMP/yks-web" rev-parse HEAD)
+          PDF="papers/${SLUG}-${TARGET_LABEL}.pdf"
+          TOTAL_PAGES=$(pdfinfo "$PDF" | awk '/^Pages:/ {print $2}')
+          BUILT_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          ARGS=(
+            --paper-id "$PAPER_ID"
+            --slug "$SLUG"
+            --transition "$TRANSITION"
+            --target-version "$TARGET_LABEL"
+            --source-repo "$SOURCE_REPO"
+            --source-path "$SOURCE_PATH"
+            --source-file "$SOURCE_FILE"
+            --source-commit "$SOURCE_COMMIT"
+            --canon-commit "$CANON_COMMIT"
+            --website-metadata-commit "$WEBSITE_COMMIT"
+            --pdf-path "$PDF"
+            --total-pages "$TOTAL_PAGES"
+            --workflow-run-url "$RUN_URL"
+            --built-at "$BUILT_AT"
+            --output "$RECEIPT"
+          )
+          if [ -n "$ADDENDUM_PATH" ]; then
+            ADDENDUM_COMMIT=$(git -C "$RUNNER_TEMP/addendum" rev-parse HEAD)
+            ARGS+=(
+              --addendum-repo "$ADDENDUM_REPO"
+              --addendum-path "$ADDENDUM_PATH"
+              --addendum-file "$RUNNER_TEMP/addendum/$ADDENDUM_PATH"
+              --addendum-commit "$ADDENDUM_COMMIT"
+            )
+          fi
+          if [ -n "$TRACKER" ]; then
+            ARGS+=(--tracker "$TRACKER")
+          fi
+          python3 .github/scripts/create-build-receipt.py "${ARGS[@]}"
+          echo "path=$RECEIPT" >> "$GITHUB_OUTPUT"
+
       - name: Upload stamped PDF as workflow artifact (visible regardless of dry_run)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ inputs.slug }}-${{ inputs.target_label }}
-          path: papers/${{ inputs.slug }}-${{ inputs.target_label }}.pdf
+          path: |
+            papers/${{ inputs.slug }}-${{ inputs.target_label }}.pdf
+            ${{ steps.build_receipt.outputs.path }}
           retention-days: 14
 
-      - name: Commit + push to yks-pubs/papers/ (triggers zenodo-deposit-release.yml)
+      - name: Commit + push controlled PDF to yks-pubs/papers/ (DOI mint remains gated)
         if: ${{ inputs.dry_run != true }}
         env:
           SLUG: ${{ inputs.slug }}
           TARGET_LABEL: ${{ inputs.target_label }}
           TRANSITION: ${{ inputs.transition }}
           TRACKER: ${{ inputs.tracker_issue }}
+          BUILD_RECEIPT: ${{ steps.build_receipt.outputs.path }}
         run: |
           set -euo pipefail
           git config user.name "wp-level-up-bot"
           git config user.email "wp-level-up-bot@yks.local"
-          git add "papers/${SLUG}-${TARGET_LABEL}.pdf"
+          git add "papers/${SLUG}-${TARGET_LABEL}.pdf" "$BUILD_RECEIPT"
           MSG="wp-level-up (${TRANSITION}): ${SLUG} -> ${TARGET_LABEL}"
           if [ -n "$TRACKER" ]; then
             MSG="$MSG  (tracker: $TRACKER)"
@@ -623,4 +725,5 @@ jobs:
           echo "=== DRY-RUN COMPLETE ==="
           echo "Stamped PDF composed at papers/${SLUG}-${TARGET_LABEL}.pdf"
           echo "Push to main was SKIPPED (dry_run=true)."
+          echo "No GitHub Release or Zenodo DOI action was requested."
           echo "Inspect the artifact to verify content + cover page before firing with dry_run=false."

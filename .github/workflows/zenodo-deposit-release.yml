@@ -1,30 +1,25 @@
-name: zenodo-deposit — fire GitHub Release for new PDF drops
+name: zenodo-deposit — operator-gated GitHub Release and Zenodo mint
 
-# Triggers a GitHub Release per newly committed paper PDF. The release is the
-# Zenodo auto-mint trigger (Zenodo-GitHub integration deposits a DOI on release
-# creation, per the existing 21-paper precedent). Once Zenodo mints the DOI,
-# the DOI appears in the Release notes; a downstream step (manual or follow-on
-# workflow) back-stamps the DOI into yks-web Hugo frontmatter.
+# Creates one GitHub Release for one exact PDF only after an explicit operator
+# release intent passes validation. The release is the Zenodo auto-mint trigger,
+# so ordinary PDF pushes MUST NOT start this workflow.
 #
 # Adopted 2026-05-13 per Yeti directive — closes the yks-pubs automation gap
 # surfaced when the 9 Lane-2 PDFs landed without firing the deposit pipeline.
 # L2 reference: yks-ops-hub#207 (forked from Klaus #199 surface #6).
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'papers/*.pdf'
   workflow_dispatch:
     inputs:
-      backfill:
-        description: 'Backfill — release all PDFs in papers/ that lack a matching tag'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
+      release_intent_path:
+        description: 'Tracked JSON under release-intents/ authorizing one exact PDF and DOI mint'
+        required: true
+        type: string
+      confirm_mint:
+        description: 'I confirm this creates a GitHub Release and may irreversibly mint a Zenodo DOI'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write     # for gh release create
@@ -37,46 +32,59 @@ concurrency:
 jobs:
   fire-releases:
     name: Create GitHub Release per new PDF (Zenodo mint trigger)
-    runs-on: [self-hosted, omen]
+    # Release intent validation and GitHub Release creation need no privileged
+    # self-hosted substrate. The repository-scoped Omen runner is offline.
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout (depth 2 for diff)
-        uses: actions/checkout@v4
+      - name: Checkout exact governed state
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 2
+          fetch-depth: 1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
-      - name: Resolve PDF list to release
-        id: pdfs
+      - name: Validate explicit operator release intent and bind exact PDF
+        id: intent
         env:
-          BACKFILL: ${{ inputs.backfill || 'false' }}
-          EVENT_NAME: ${{ github.event_name }}
+          INTENT_PATH: ${{ inputs.release_intent_path }}
+          CONFIRM_MINT: ${{ inputs.confirm_mint }}
         run: |
-          if [[ "$BACKFILL" == "true" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            # Backfill mode: every PDF in papers/
-            PDFS=$(ls papers/*.pdf 2>/dev/null | sort)
-            echo "mode: backfill (all PDFs in papers/)"
-          else
-            # Push mode: only PDFs added/modified in this push
-            PDFS=$(git diff --diff-filter=AM --name-only HEAD~1 HEAD -- 'papers/*.pdf' || true)
-            echo "mode: incremental (push diff)"
+          set -euo pipefail
+          if [ "$CONFIRM_MINT" != "true" ]; then
+            echo "::error::confirm_mint is false — refusing to create a release or mint a DOI"
+            exit 1
           fi
-          echo "$PDFS"
-          # Save list as multiline output
-          {
-            echo "list<<EOF"
-            echo "$PDFS"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          case "$INTENT_PATH" in
+            release-intents/*.json|release-intents/*/*.json) ;;
+            *) echo "::error::release_intent_path must be a JSON file under release-intents/"; exit 1 ;;
+          esac
+          test -f "$INTENT_PATH" || { echo "::error::tracked release intent not found: $INTENT_PATH"; exit 1; }
+          git ls-files --error-unmatch "$INTENT_PATH" >/dev/null
+          python3 .github/scripts/validate-release-intent.py \
+            --intent "$INTENT_PATH" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --github-output "$GITHUB_OUTPUT"
 
-      - name: Create Release per PDF (idempotent on existing tags)
+      - name: Create one release for the approved PDF (idempotent on existing tag)
         env:
           GH_TOKEN: ${{ github.token }}
           MESH_TOKEN: ${{ secrets.MESH_TOKEN }}
-          PDFS: ${{ steps.pdfs.outputs.list }}
+          PDFS: ${{ steps.intent.outputs.pdf_path }}
+          OPERATOR_DECISION_REF: ${{ steps.intent.outputs.operator_decision_ref }}
+          APPROVED_PDF_SHA256: ${{ steps.intent.outputs.pdf_sha256 }}
+          PAPYRUS_RELEASE_GATE_REF: ${{ steps.intent.outputs.papyrus_release_gate_ref }}
+          VALIDATION_RECEIPT_REF: ${{ steps.intent.outputs.validation_receipt_ref }}
+          TEN_FIELD_PREFLIGHT_REF: ${{ steps.intent.outputs.ten_field_preflight_ref }}
+          SOURCE_COMMIT: ${{ steps.intent.outputs.source_commit }}
+          SOURCE_REPOSITORY: ${{ steps.intent.outputs.source_repository }}
+          SOURCE_CUSTODY: ${{ steps.intent.outputs.source_custody }}
+          SUBSTANTIVE_PAGES: ${{ steps.intent.outputs.substantive_page_count }}
+          PEER_REVIEWED_SOURCES: ${{ steps.intent.outputs.verified_peer_reviewed_source_count }}
+          POST_2024_SOURCES: ${{ steps.intent.outputs.verified_post_2024_primary_source_count }}
+          OUTBOUND_CROSS_PAPER: ${{ steps.intent.outputs.outbound_cross_paper_reference_count }}
         run: |
           set -euo pipefail
           python3 <<'PYEOF'
@@ -111,7 +119,7 @@ jobs:
               # Pull title + abstract from yks-web. Requires MESH_TOKEN with yks-web read.
               if not mesh_token:
                   return {}
-              url = f"https://api.github.com/repos/LittleYeti-Dev/yks-web/contents/sites/nsq-pub/content/pubs/white-papers/{slug}.md?ref=main"
+              url = f"https://api.github.com/repos/LittleYeti-Dev/yks1.0-web/contents/sites/nsq-pub/content/pubs/white-papers/{slug}.md?ref=main"
               code, d = gh_api(url, headers={'Authorization': f'Bearer {mesh_token}', 'Accept': 'application/vnd.github+json'})
               if code != 200:
                   print(f"  [{slug}] frontmatter fetch failed (code {code})")
@@ -171,8 +179,16 @@ jobs:
                   "",
                   f"**Version:** {version}",
                   f"**Slug:** `{slug}`",
-                  f"**Live page:** https://nonsequitur.tech/pubs/white-papers/{slug}/",
+                  f"**Live page:** https://nonsequitur.tech/white-papers/{slug}/",
                   f"**PDF:** [{os.path.basename(pdf_path)}](https://github.com/{owner}/{repo_name}/releases/download/{tag}/{os.path.basename(pdf_path)})",
+                  f"**Approved SHA-256:** `{os.environ['APPROVED_PDF_SHA256']}`",
+                  f"**Operator release decision:** {os.environ['OPERATOR_DECISION_REF']}",
+                  f"**PAPYRUS release gate:** {os.environ['PAPYRUS_RELEASE_GATE_REF']}",
+                  f"**Validation receipt:** {os.environ['VALIDATION_RECEIPT_REF']}",
+                  f"**Ten-field preflight:** {os.environ['TEN_FIELD_PREFLIGHT_REF']}",
+                  f"**Source:** `{os.environ['SOURCE_REPOSITORY']}@{os.environ['SOURCE_COMMIT']}` / `{os.environ['SOURCE_CUSTODY']}`",
+                  f"**Research floor:** {os.environ['SUBSTANTIVE_PAGES']} substantive pages; {os.environ['PEER_REVIEWED_SOURCES']} verified peer-reviewed sources; {os.environ['POST_2024_SOURCES']} post-2024 primary sources",
+                  f"**Cross-paper gate:** {os.environ['OUTBOUND_CROSS_PAPER']} outbound reference(s), chain-of-evidence PASS",
                   "",
               ]
               if abstract:
