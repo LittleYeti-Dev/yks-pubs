@@ -42,7 +42,7 @@ Canon maturity claims.
 ### Naming convention
 
 `papers/<slug>-v<version>.pdf` where:
-- `<slug>` matches the Hugo page slug at `yks-web/sites/nsq-pub/content/pubs/white-papers/<slug>.md`
+- `<slug>` matches the Hugo page slug at `yks1.0-web/sites/nsq-pub/content/pubs/white-papers/<slug>.md`
 - `<version>` uses dots for seed releases (`0.1-seed`, `0.1-seed-rev3`) and hyphens for preprints (`1-preprint`, `1.1-preprint`)
 
 The workflow's `parse_pdf_name()` step is the canonical name parser.
@@ -82,8 +82,9 @@ editable manuscript.
 
 | Stage | Repo | Visibility | Role |
 |---|---|---|---|
-| Authoring & R&E | `yks-spine-binder` | private | Manuscript drafting, narrative bibles, ADRs |
-| Rendering | `yks-web` (`sites/nsq-pub/`) | private repo, **public site** | Hugo → Cloudflare Pages → nonsequitur.tech |
+| Authoring, evidence, and control | `papyrus-factory-recurring` + PAPYRUS D1 | private | Exact editable source, ledgers, reviews, gates, and dynamic workflow state |
+| Maturity standard | `yks1.0-canon` | public | Fail-closed publication and Canon-graduation rules |
+| Public presentation | `yks1.0-web` (`sites/nsq-pub/`) | private repo, **public site** | Approved metadata, discovery copy, and exact PDF mirror → Cloudflare Pages → nonsequitur.tech |
 | **Publication archive** | **`yks-pubs`** | **public** | **Exact released PDFs, prior versions, receipts, and explicitly gated GitHub Releases** |
 
 ## Currently published — decalogy P1–P7

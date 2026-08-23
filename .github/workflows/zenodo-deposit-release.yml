@@ -32,7 +32,9 @@ concurrency:
 jobs:
   fire-releases:
     name: Create GitHub Release per new PDF (Zenodo mint trigger)
-    runs-on: [self-hosted, omen]
+    # Release intent validation and GitHub Release creation need no privileged
+    # self-hosted substrate. The repository-scoped Omen runner is offline.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout exact governed state
         uses: actions/checkout@v6
@@ -77,6 +79,7 @@ jobs:
           VALIDATION_RECEIPT_REF: ${{ steps.intent.outputs.validation_receipt_ref }}
           TEN_FIELD_PREFLIGHT_REF: ${{ steps.intent.outputs.ten_field_preflight_ref }}
           SOURCE_COMMIT: ${{ steps.intent.outputs.source_commit }}
+          SOURCE_REPOSITORY: ${{ steps.intent.outputs.source_repository }}
           SOURCE_CUSTODY: ${{ steps.intent.outputs.source_custody }}
           SUBSTANTIVE_PAGES: ${{ steps.intent.outputs.substantive_page_count }}
           PEER_REVIEWED_SOURCES: ${{ steps.intent.outputs.verified_peer_reviewed_source_count }}
@@ -116,7 +119,7 @@ jobs:
               # Pull title + abstract from yks-web. Requires MESH_TOKEN with yks-web read.
               if not mesh_token:
                   return {}
-              url = f"https://api.github.com/repos/LittleYeti-Dev/yks-web/contents/sites/nsq-pub/content/pubs/white-papers/{slug}.md?ref=main"
+              url = f"https://api.github.com/repos/LittleYeti-Dev/yks1.0-web/contents/sites/nsq-pub/content/pubs/white-papers/{slug}.md?ref=main"
               code, d = gh_api(url, headers={'Authorization': f'Bearer {mesh_token}', 'Accept': 'application/vnd.github+json'})
               if code != 200:
                   print(f"  [{slug}] frontmatter fetch failed (code {code})")
@@ -176,14 +179,14 @@ jobs:
                   "",
                   f"**Version:** {version}",
                   f"**Slug:** `{slug}`",
-                  f"**Live page:** https://nonsequitur.tech/pubs/white-papers/{slug}/",
+                  f"**Live page:** https://nonsequitur.tech/white-papers/{slug}/",
                   f"**PDF:** [{os.path.basename(pdf_path)}](https://github.com/{owner}/{repo_name}/releases/download/{tag}/{os.path.basename(pdf_path)})",
                   f"**Approved SHA-256:** `{os.environ['APPROVED_PDF_SHA256']}`",
                   f"**Operator release decision:** {os.environ['OPERATOR_DECISION_REF']}",
                   f"**PAPYRUS release gate:** {os.environ['PAPYRUS_RELEASE_GATE_REF']}",
                   f"**Validation receipt:** {os.environ['VALIDATION_RECEIPT_REF']}",
                   f"**Ten-field preflight:** {os.environ['TEN_FIELD_PREFLIGHT_REF']}",
-                  f"**Source commit / custody:** `{os.environ['SOURCE_COMMIT']}` / `{os.environ['SOURCE_CUSTODY']}`",
+                  f"**Source:** `{os.environ['SOURCE_REPOSITORY']}@{os.environ['SOURCE_COMMIT']}` / `{os.environ['SOURCE_CUSTODY']}`",
                   f"**Research floor:** {os.environ['SUBSTANTIVE_PAGES']} substantive pages; {os.environ['PEER_REVIEWED_SOURCES']} verified peer-reviewed sources; {os.environ['POST_2024_SOURCES']} post-2024 primary sources",
                   f"**Cross-paper gate:** {os.environ['OUTBOUND_CROSS_PAPER']} outbound reference(s), chain-of-evidence PASS",
                   "",

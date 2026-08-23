@@ -74,6 +74,7 @@ def validate(intent_path: Path, repo_root: Path, expected_pdf: str | None = None
     validation_ref = require_text(record, "validation_receipt_ref")
     ten_field_ref = require_text(record, "ten_field_preflight_ref")
     source_commit = require_text(record, "source_commit")
+    source_repository = require_text(record, "source_repository")
     source_custody = require_text(record, "source_custody")
     cross_paper_gate = require_text(record, "cross_paper_evidence_gate")
     page_count = require_count(record, "substantive_page_count")
@@ -103,8 +104,10 @@ def validate(intent_path: Path, repo_root: Path, expected_pdf: str | None = None
     ):
         if not value.startswith(("https://github.com/", "LittleYeti-Dev/", "d1://")):
             raise IntentError(f"{field} must identify durable evidence")
-    if not re.fullmatch(r"[0-9a-f]{7,40}", source_commit):
-        raise IntentError("source_commit must be a Git commit SHA")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise IntentError("source_commit must be a full Git commit SHA")
+    if source_repository != "LittleYeti-Dev/papyrus-factory-recurring":
+        raise IntentError("source_repository must be LittleYeti-Dev/papyrus-factory-recurring")
     if source_custody not in {"complete-original", "complete-recovered-verified"}:
         raise IntentError("source_custody must be complete-original or complete-recovered-verified")
     if cross_paper_gate != "pass":
@@ -148,6 +151,7 @@ def validate(intent_path: Path, repo_root: Path, expected_pdf: str | None = None
         "validation_receipt_ref": validation_ref,
         "ten_field_preflight_ref": ten_field_ref,
         "source_commit": source_commit,
+        "source_repository": source_repository,
         "source_custody": source_custody,
         "substantive_page_count": page_count,
         "verified_peer_reviewed_source_count": peer_reviewed,

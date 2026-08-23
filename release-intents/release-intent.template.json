@@ -14,6 +14,7 @@
   "validation_receipt_ref": "https://github.com/LittleYeti-Dev/REPO/blob/COMMIT/path/to/validation-receipt.json",
   "ten_field_preflight_ref": "https://github.com/LittleYeti-Dev/REPO/blob/COMMIT/path/to/ten-field-preflight.json",
   "source_commit": "REPLACE_WITH_GIT_COMMIT_SHA",
+  "source_repository": "LittleYeti-Dev/papyrus-factory-recurring",
   "source_custody": "complete-original",
   "substantive_page_count": 25,
   "verified_peer_reviewed_source_count": 15,

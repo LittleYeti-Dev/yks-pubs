@@ -20,7 +20,8 @@ Rules:
 - the bound manuscript has at least 25 substantive pages, 15 verified
   peer-reviewed sources, three verified post-2024 primary sources, and one
   outbound cross-paper reference with a passing chain-of-evidence gate;
-- the exact editable source is retained at the recorded commit, whether it is
+- the exact editable source is retained in `LittleYeti-Dev/papyrus-factory-recurring`
+  at the recorded commit, whether it is
   the original controlled source or a transparently recovered and verified source;
 - the PAPYRUS release gate, validation receipt, and ten-field preflight are
   durable and named;
