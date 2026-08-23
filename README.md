@@ -1,21 +1,43 @@
 # yks-pubs — Non Sequitur Publishing canonical paper archive
 
-Canonical PDF artifacts for white papers published under the **Non Sequitur Publishing** imprint of Yeti Knowledge Systems.
+Released PDF artifacts for papers published under the **Non Sequitur Publishing** imprint of Yeti Knowledge Systems.
 
-This repository is the publication endpoint in the YKS pipeline. It holds only published v1.0+ artifacts — never working drafts, R&E state, or narrative source.
+This repository is the released-artifact archive in the PAPYRUS pipeline. It
+does not decide paper identity, maturity, series placement, or source authority.
+PAPYRUS/D1 controls workflow state, Zenodo/DOI provides persistent publication
+identity, Canon defines maturity, and the PUBS website presents approved state.
 
 
 
-## How publishing fires (the reason this repo exists)
+## How publishing is controlled
 
-**Drop a PDF → GitHub Release auto-fires → Zenodo mints a DOI.** This repo is the publication endpoint of the YKS pipeline; its sole job is to be the trigger surface for the Zenodo-GitHub integration that has been configured on this repository.
+**A PDF push does not mint a DOI.** Building, preserving an existing
+publication, and minting a new DOI are separate operations. A GitHub Release
+can trigger the connected Zenodo integration, so release creation requires an
+exact-PDF intent bound to a durable operator decision and a second explicit
+mint confirmation.
 
 ### The chain
 
-1. **PDF lands** in `papers/<slug>-v<version>.pdf` (via PR merge, direct push, or LZ sync from upstream — `yks-spine-binder/works/non-fiction/white-papers/<slug>/release/<version>/<slug>-v<version>.pdf`).
-2. **`zenodo-deposit-release.yml`** workflow fires on the push (or via `workflow_dispatch` for backfill). Creates a GitHub Release tagged `<slug>-v<version>` with the PDF as the release asset and a metadata-rich body pulled from the matching `yks-web` Hugo frontmatter (title, abstract, version, slug, live-page URL).
-3. **Zenodo-GitHub integration** (pre-configured on this repo — that's the *why* of yks-pubs) detects the new Release, ingests the PDF + Release metadata, and mints a DOI (`10.5281/zenodo.<N>`).
-4. **DOI back-stamp** — a downstream step (manual or follow-on workflow) pulls the new DOI and updates the `doi:` + `zenodo_id:` fields on the corresponding `yks-web` Hugo frontmatter. The DOI badge then renders on `nonsequitur.tech/pubs/white-papers/<slug>/`.
+1. **Build:** `wp-level-up.yml` renders a new version, fails on an existing
+   target path, and may place the controlled PDF in `papers/`. It does not mint.
+2. **Gate:** PAPYRUS records the release gate, exact source commit/custody,
+   25-page floor, 15 verified peer-reviewed sources, current-source floor,
+   cross-paper evidence chain, ten-field preflight, and operator decision.
+3. **Intent:** a tracked JSON under `release-intents/` binds those receipts to
+   one exact PDF hash and the action `mint-new-doi`.
+4. **Mint:** the operator manually runs `zenodo-deposit-release.yml` with the
+   intent path and `confirm_mint=true`. Only then is a GitHub Release created.
+5. **Read back:** after Zenodo resolves, the exact DOI, record, PDF hash,
+   metadata, canonical URL, archive, website, citations, and supersession state
+   are verified and receipted.
+
+An already-published artifact takes a different path:
+`wp-reconcile-existing-publication.yml` downloads the named Zenodo PDF, compares
+its SHA-256 with the website mirror, validates identity metadata, and can place
+the unchanged PDF plus a reconciliation receipt in this archive. That workflow
+cannot mint a DOI and explicitly withholds source custody, series, citation, and
+Canon maturity claims.
 
 ### Naming convention
 
@@ -27,18 +49,27 @@ The workflow's `parse_pdf_name()` step is the canonical name parser.
 
 ### Operational notes
 
-- The workflow is **idempotent** — re-runs do not double-Release. Releases are keyed off git tag; existing tags are skipped.
-- **Backfill mode** — `workflow_dispatch` with `backfill: true` releases every PDF in `papers/` that lacks a matching tag. Use this for catch-up after manual PDF drops.
-- **Cross-repo metadata fetch** requires `MESH_TOKEN` repo secret with `yks-web` read access. Without it, Releases still create but with degraded body content (slug-only, no title/abstract).
+- Release is **fail-closed** — missing intent, hash mismatch, missing source
+  custody, insufficient page/source floors, held cross-paper evidence, or a
+  false mint confirmation stops before GitHub Release creation.
+- Reconciliation is **non-overwriting** — an existing archive target with
+  different bytes stops the workflow.
+- Release tags remain idempotent; an existing tag is not recreated.
+- There is no bulk backfill-to-mint mode. Each DOI action is paper-specific.
+- Cross-repo reads require `MESH_TOKEN`; missing access stops reconciliation.
 - **The Zenodo-GitHub integration must remain configured** on this repo. If it's removed, DOIs stop minting. Check at: https://zenodo.org/account/settings/github/
 
 ### What this repo is NOT for
 
-- Draft manuscripts (those live in `yks-spine-binder`)
-- Hugo source (that's `yks-web`)
-- Architecture / process docs (that's `yks-build` / `yks-ops-hub`)
+- Draft or recovered manuscripts (those belong in PAPYRUS at an exact commit)
+- Hugo source (that belongs in `yks1.0-web`)
+- Maturity rules (those belong in Canon)
+- Dynamic paper/workflow state (that belongs in PAPYRUS D1)
+- Governing issue history (that belongs in `yks2.0-ops-hub`)
 
-This repo holds **only the final PDFs of published papers** + the workflow that fires their Zenodo deposits. Nothing else.
+This repo holds released PDFs, prior-version archives, release intents, and
+publication/reconciliation receipts. It does not hold the authoritative
+editable manuscript.
 
 ## Where to find each part of a paper
 
@@ -53,7 +84,7 @@ This repo holds **only the final PDFs of published papers** + the workflow that 
 |---|---|---|---|
 | Authoring & R&E | `yks-spine-binder` | private | Manuscript drafting, narrative bibles, ADRs |
 | Rendering | `yks-web` (`sites/nsq-pub/`) | private repo, **public site** | Hugo → Cloudflare Pages → nonsequitur.tech |
-| **Publication archive** | **`yks-pubs`** | **public** | **Final PDFs + GitHub Releases for Zenodo DOI auto-mint** |
+| **Publication archive** | **`yks-pubs`** | **public** | **Exact released PDFs, prior versions, receipts, and explicitly gated GitHub Releases** |
 
 ## Currently published — decalogy P1–P7
 

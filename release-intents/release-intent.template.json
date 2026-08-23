@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "publication_action": "mint-new-doi",
+  "paper_id": "PAP-EXAMPLE-001",
+  "slug": "example-paper",
+  "version_label": "v1-preprint",
+  "pdf_path": "papers/example-paper-v1-preprint.pdf",
+  "pdf_sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS",
+  "operator_decision_ref": "https://github.com/LittleYeti-Dev/REPO/issues/NUMBER#issuecomment-NUMBER",
+  "operator_approved_at": "YYYY-MM-DDTHH:MM:SS-04:00",
+  "author": "Justin H. Kuiper",
+  "rights": "CC BY-ND 4.0",
+  "papyrus_release_gate_ref": "d1://yks-corpus-ledger/papyrus_release_gate/PAP-EXAMPLE-001",
+  "validation_receipt_ref": "https://github.com/LittleYeti-Dev/REPO/blob/COMMIT/path/to/validation-receipt.json",
+  "ten_field_preflight_ref": "https://github.com/LittleYeti-Dev/REPO/blob/COMMIT/path/to/ten-field-preflight.json",
+  "source_commit": "REPLACE_WITH_GIT_COMMIT_SHA",
+  "source_custody": "complete-original",
+  "substantive_page_count": 25,
+  "verified_peer_reviewed_source_count": 15,
+  "verified_post_2024_primary_source_count": 3,
+  "outbound_cross_paper_reference_count": 1,
+  "cross_paper_evidence_gate": "pass"
+}

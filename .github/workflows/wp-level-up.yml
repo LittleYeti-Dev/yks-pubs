@@ -1,4 +1,4 @@
-name: wp-level-up — mature a paper to its next level (Zenodo DOI auto-mints downstream)
+name: wp-level-up — mature a paper to its next level (operator-gated release)
 
 # Generic paper-promotion workflow. Picks up where compose-v11-errata.yml left off,
 # parametric on transition_type so the same backbone handles every level-up shape:
@@ -14,8 +14,9 @@ name: wp-level-up — mature a paper to its next level (Zenodo DOI auto-mints do
 #   3. Compile to PDF via pandoc + xelatex.
 #   4. Stamp cover + footer + XMP via yks-web/scripts/stamp-paper-pdf.py.
 #   5. Push to yks-pubs/papers/<slug>-<target_label>.pdf using MESH_TOKEN.
-#   6. zenodo-deposit-release.yml auto-fires on the PDF push -> GitHub Release ->
-#      Zenodo's GitHub OAuth integration mints a DOI.
+#   6. Stop after the controlled PDF push. A separate, explicit operator-approved
+#      release intent is required before zenodo-deposit-release.yml can create a
+#      GitHub Release and trigger Zenodo DOI minting.
 #
 # Adopted 2026-05-17, supersedes compose-v11-errata.yml (which becomes a legacy alias
 # for the errata-bump transition).
@@ -104,7 +105,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout yks-pubs (MESH_TOKEN so push triggers downstream zenodo-deposit-release.yml)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           token: ${{ secrets.MESH_TOKEN }}
 
@@ -133,7 +134,9 @@ jobs:
           ls -1 "papers/" | grep "^${SLUG}-" || echo "  (no existing PDFs for this slug)"
           TARGET="papers/${SLUG}-${TARGET_LABEL}.pdf"
           if [ -f "$TARGET" ]; then
-            echo "WARNING: target file $TARGET already exists; this run will overwrite it"
+            echo "::error::target file $TARGET already exists — refusing to overwrite an identified publication artifact"
+            echo "Use a new version label, or run the governed reconciliation/back-rev process."
+            exit 1
           fi
 
       - name: Clone source repos (yks-web for stamper + source_repo for manuscript + yks-canon for grounding)
@@ -574,13 +577,13 @@ jobs:
           echo "stamped PDF: $OUT  size: $(stat -c%s $OUT) bytes  sha256: $(sha256sum $OUT | awk '{print $1}')"
 
       - name: Upload stamped PDF as workflow artifact (visible regardless of dry_run)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ inputs.slug }}-${{ inputs.target_label }}
           path: papers/${{ inputs.slug }}-${{ inputs.target_label }}.pdf
           retention-days: 14
 
-      - name: Commit + push to yks-pubs/papers/ (triggers zenodo-deposit-release.yml)
+      - name: Commit + push controlled PDF to yks-pubs/papers/ (DOI mint remains gated)
         if: ${{ inputs.dry_run != true }}
         env:
           SLUG: ${{ inputs.slug }}
@@ -623,4 +626,5 @@ jobs:
           echo "=== DRY-RUN COMPLETE ==="
           echo "Stamped PDF composed at papers/${SLUG}-${TARGET_LABEL}.pdf"
           echo "Push to main was SKIPPED (dry_run=true)."
+          echo "No GitHub Release or Zenodo DOI action was requested."
           echo "Inspect the artifact to verify content + cover page before firing with dry_run=false."

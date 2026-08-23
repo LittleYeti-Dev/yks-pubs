@@ -1,0 +1,267 @@
+name: wp-reconcile-existing-publication — preserve exact DOI artifact without minting
+
+on:
+  workflow_dispatch:
+    inputs:
+      paper_id:
+        description: 'PAPYRUS paper ID (for example PAP-SJCE-001)'
+        required: true
+        type: string
+      slug:
+        description: 'Canonical paper slug'
+        required: true
+        type: string
+      version:
+        description: 'Exact published version recorded by Zenodo (for example v0.1-preprint)'
+        required: true
+        type: string
+      source_pdf_path:
+        description: 'Exact existing mirror path inside yks1.0-web (sites/nsq-pub/static/papers/...pdf)'
+        required: true
+        type: string
+      zenodo_pdf_filename:
+        description: 'Exact PDF filename attached to the existing Zenodo record'
+        required: true
+        type: string
+      expected_sha256:
+        description: 'Approved SHA-256 shared by the website mirror and Zenodo PDF'
+        required: true
+        type: string
+      doi:
+        description: 'Existing DOI (10.5281/zenodo.NNNNN)'
+        required: true
+        type: string
+      canonical_url:
+        description: 'Canonical public paper page URL'
+        required: true
+        type: string
+      title:
+        description: 'Exact published title'
+        required: true
+        type: string
+      author:
+        description: 'Exact author identity'
+        required: true
+        type: string
+        default: 'Justin H. Kuiper'
+      published_date:
+        description: 'Exact Zenodo publication date (YYYY-MM-DD)'
+        required: true
+        type: string
+      rights:
+        description: 'Expected Zenodo license identifier or title'
+        required: true
+        type: string
+        default: 'CC BY-ND 4.0'
+      operator_decision_ref:
+        description: 'Durable joint decision URL authorizing reconciliation of this exact publication'
+        required: true
+        type: string
+      apply:
+        description: 'Commit the exact PDF and receipt to yks-pubs; false performs audit-only'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wp-reconcile-${{ inputs.paper_id }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: reconcile ${{ inputs.paper_id }} ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout released artifact archive
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.MESH_TOKEN }}
+          path: yks-pubs
+
+      - name: Checkout public presentation source
+        uses: actions/checkout@v6
+        with:
+          repository: LittleYeti-Dev/yks1.0-web
+          token: ${{ secrets.MESH_TOKEN }}
+          path: yks-web
+
+      - name: Validate bounded inputs and locate exact website PDF
+        id: paths
+        env:
+          PAPER_ID: ${{ inputs.paper_id }}
+          SLUG: ${{ inputs.slug }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_PDF_PATH: ${{ inputs.source_pdf_path }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib, re
+          paper_id = os.environ['PAPER_ID']
+          slug = os.environ['SLUG']
+          version = os.environ['VERSION']
+          source = os.environ['SOURCE_PDF_PATH']
+          if not re.fullmatch(r'[A-Z0-9]+(?:-[A-Z0-9]+)+', paper_id):
+              raise SystemExit('invalid PAPYRUS paper_id')
+          if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', slug):
+              raise SystemExit('invalid canonical slug')
+          if not re.fullmatch(r'v[0-9]+(?:[.-][0-9]+)*(?:-[a-z0-9]+)*', version):
+              raise SystemExit('invalid version label')
+          path = pathlib.PurePosixPath(source)
+          if path.is_absolute() or '..' in path.parts:
+              raise SystemExit('source_pdf_path must be relative and cannot traverse')
+          if len(path.parts) < 5 or path.parts[:4] != ('sites', 'nsq-pub', 'static', 'papers'):
+              raise SystemExit('source_pdf_path must be under sites/nsq-pub/static/papers/')
+          if path.suffix.lower() != '.pdf':
+              raise SystemExit('source_pdf_path must identify a PDF')
+          PY
+          SOURCE="yks-web/${SOURCE_PDF_PATH}"
+          TARGET="papers/${SLUG}-${VERSION}.pdf"
+          RECEIPT="records/publications/${PAPER_ID}/${VERSION}/${GITHUB_RUN_ID}.json"
+          test -f "$SOURCE" || { echo "::error::website source PDF not found: $SOURCE"; exit 1; }
+          echo "source=$SOURCE" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "receipt=$RECEIPT" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch the existing Zenodo record and named PDF
+        id: zenodo
+        env:
+          DOI: ${{ inputs.doi }}
+          ZENODO_FILENAME: ${{ inputs.zenodo_pdf_filename }}
+        run: |
+          set -euo pipefail
+          RECORD_ID=$(python3 - <<'PY'
+          import os, re
+          match = re.fullmatch(r'10\.5281/zenodo\.([0-9]+)', os.environ['DOI'], re.I)
+          if not match:
+              raise SystemExit('DOI is not an exact Zenodo DOI')
+          print(match.group(1))
+          PY
+          )
+          RECORD_URL="https://zenodo.org/records/${RECORD_ID}"
+          API_URL="https://zenodo.org/api/records/${RECORD_ID}"
+          curl --fail --silent --show-error --location "$API_URL" --output zenodo-record.json
+          CONTENT_URL=$(python3 - <<'PY'
+          import json, os
+          record = json.load(open('zenodo-record.json', encoding='utf-8'))
+          wanted = os.environ['ZENODO_FILENAME']
+          for item in record.get('files', []):
+              if item.get('key') == wanted:
+                  links = item.get('links') or {}
+                  url = links.get('content') or links.get('self')
+                  if url:
+                      print(url)
+                      break
+          else:
+              raise SystemExit(f'named Zenodo PDF not found: {wanted}')
+          PY
+          )
+          curl --fail --silent --show-error --location "$CONTENT_URL" --output zenodo-paper.pdf
+          echo "record_url=$RECORD_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Verify identity and byte agreement; emit reconciliation receipt
+        env:
+          PAPER_ID: ${{ inputs.paper_id }}
+          SLUG: ${{ inputs.slug }}
+          TITLE: ${{ inputs.title }}
+          AUTHOR: ${{ inputs.author }}
+          VERSION: ${{ inputs.version }}
+          PUBLISHED_DATE: ${{ inputs.published_date }}
+          DOI: ${{ inputs.doi }}
+          ZENODO_RECORD_URL: ${{ steps.zenodo.outputs.record_url }}
+          CANONICAL_URL: ${{ inputs.canonical_url }}
+          RIGHTS: ${{ inputs.rights }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+          SOURCE_PDF: ${{ steps.paths.outputs.source }}
+          ARCHIVE_PDF: ${{ steps.paths.outputs.target }}
+          RECEIPT: ${{ steps.paths.outputs.receipt }}
+          OPERATOR_DECISION_REF: ${{ inputs.operator_decision_ref }}
+          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        working-directory: yks-pubs
+        run: |
+          set -euo pipefail
+          VERIFIED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          SOURCE_REPO_COMMIT=$(git -C ../yks-web rev-parse HEAD)
+          ARCHIVE_BASE_COMMIT=$(git rev-parse HEAD)
+          python3 .github/scripts/reconcile-existing-publication.py \
+            --paper-id "$PAPER_ID" \
+            --slug "$SLUG" \
+            --title "$TITLE" \
+            --author "$AUTHOR" \
+            --version "$VERSION" \
+            --published-date "$PUBLISHED_DATE" \
+            --doi "$DOI" \
+            --zenodo-record-url "$ZENODO_RECORD_URL" \
+            --canonical-url "$CANONICAL_URL" \
+            --rights "$RIGHTS" \
+            --expected-sha256 "$EXPECTED_SHA256" \
+            --source-pdf "../$SOURCE_PDF" \
+            --zenodo-pdf "../zenodo-paper.pdf" \
+            --zenodo-record-json "../zenodo-record.json" \
+            --archive-pdf-path "$ARCHIVE_PDF" \
+            --operator-decision-ref "$OPERATOR_DECISION_REF" \
+            --source-repo-commit "$SOURCE_REPO_COMMIT" \
+            --archive-base-commit "$ARCHIVE_BASE_COMMIT" \
+            --workflow-run-url "$WORKFLOW_RUN_URL" \
+            --verified-at "$VERIFIED_AT" \
+            --output "$RECEIPT"
+
+      - name: Reconcile exact PDF into released archive without overwrite
+        env:
+          APPLY: ${{ inputs.apply }}
+          SOURCE: ${{ steps.paths.outputs.source }}
+          TARGET: ${{ steps.paths.outputs.target }}
+        run: |
+          set -euo pipefail
+          SOURCE="$GITHUB_WORKSPACE/$SOURCE"
+          TARGET="$GITHUB_WORKSPACE/yks-pubs/$TARGET"
+          if [ -f "$TARGET" ]; then
+            cmp --silent "$SOURCE" "$TARGET" || {
+              echo "::error::archive target exists with different bytes — refusing overwrite"
+              exit 1
+            }
+            echo "archive target already contains the exact approved PDF"
+          elif [ "$APPLY" = "true" ]; then
+            cp "$SOURCE" "$TARGET"
+            cmp --silent "$SOURCE" "$TARGET"
+            echo "exact approved PDF staged at $TARGET"
+          else
+            echo "audit-only: exact PDF is absent from the archive; no copy performed"
+          fi
+
+      - name: Upload audit receipt
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.paper_id }}-${{ inputs.version }}-reconciliation-receipt
+          path: yks-pubs/${{ steps.paths.outputs.receipt }}
+          retention-days: 90
+
+      - name: Commit exact archive and receipt only after joint approval
+        if: ${{ inputs.apply == true }}
+        env:
+          TARGET: ${{ steps.paths.outputs.target }}
+          RECEIPT: ${{ steps.paths.outputs.receipt }}
+          PAPER_ID: ${{ inputs.paper_id }}
+          VERSION: ${{ inputs.version }}
+          DECISION: ${{ inputs.operator_decision_ref }}
+        working-directory: yks-pubs
+        run: |
+          set -euo pipefail
+          git config user.name "wp-reconciliation-bot"
+          git config user.email "wp-reconciliation-bot@yks.local"
+          git add -- "$TARGET" "$RECEIPT"
+          if git diff --cached --quiet; then
+            echo "archive and receipt are already exact; no commit required"
+            exit 0
+          fi
+          git commit -m "wp-reconcile: preserve ${PAPER_ID} ${VERSION} exact published artifact" \
+            -m "Operator decision: ${DECISION}"
+          git push origin HEAD:main
+
+      - name: Explicit non-claims
+        run: |
+          echo "No DOI was minted."
+          echo "No website, D1, source manuscript, series, supersession, or Canon maturity state was changed."
