@@ -1,0 +1,72 @@
+[
+  {
+    "paper_id": "nsq:agentic-substrate",
+    "series": "AI Governance Series",
+    "file": "papers/agentic-substrate-v1-preprint.pdf",
+    "doi": "10.5281/zenodo.22771316",
+    "sha256": "ce4c892cf9131ed7cb9ba6c4af3ae797c4029e69bc45c993209ce8ff2c133ac5",
+    "cover_revision": "2026-09-15",
+    "manuscript": "unchanged",
+    "source_floor": "deferred by author; not newly certified"
+  },
+  {
+    "paper_id": "nsq:alistair-prime-in-a-box",
+    "series": "AI Governance Series",
+    "file": "papers/alistair-prime-in-a-box-v1-preprint.pdf",
+    "doi": "10.5281/zenodo.22771501",
+    "sha256": "54f1fabf74a3972147a94539b831ab91dd56f946e3fd5a32629259baed608df9",
+    "cover_revision": "2026-09-15",
+    "manuscript": "unchanged",
+    "source_floor": "deferred by author; not newly certified"
+  },
+  {
+    "paper_id": "nsq:edge-ai-doctrine",
+    "series": "AI Governance Series",
+    "file": "papers/edge-ai-doctrine-v1-preprint.pdf",
+    "doi": "10.5281/zenodo.22771512",
+    "sha256": "608f78d330d028e2cc913abb616af98b87891a659afdc80bbaa67634d2807262",
+    "cover_revision": "2026-09-15",
+    "manuscript": "unchanged",
+    "source_floor": "deferred by author; not newly certified"
+  },
+  {
+    "paper_id": "nsq:epistemic-constraints",
+    "series": "Foundations of Human-Governed Computing",
+    "file": "papers/epistemic-constraints-v1-1-preprint.pdf",
+    "doi": "10.5281/zenodo.22771520",
+    "sha256": "ad27a5031e13db9babb828fee95f1923e53ba2107937aec140854696a326ab58",
+    "cover_revision": "2026-09-15",
+    "manuscript": "unchanged",
+    "source_floor": "deferred by author; not newly certified"
+  },
+  {
+    "paper_id": "nsq:operating-model-agentic-teams",
+    "series": "AI Governance Series",
+    "file": "papers/operating-model-agentic-teams-v1-preprint.pdf",
+    "doi": "10.5281/zenodo.22771534",
+    "sha256": "071e60baccc7cb97f9f75f7b2df80b8e96948b12d9cc41b915dbcb3bc7fb606e",
+    "cover_revision": "2026-09-15",
+    "manuscript": "unchanged",
+    "source_floor": "deferred by author; not newly certified"
+  },
+  {
+    "paper_id": "nsq:rf-skipjack",
+    "series": "The Implications of Edge Degraded Ops",
+    "file": "papers/rf-skipjack-v0-3-preprint.pdf",
+    "doi": "10.5281/zenodo.22771544",
+    "sha256": "f6028d4a800ddf4cfb48877ba134f59ce0a04b610884a6acdf2521b07a50dbc4",
+    "cover_revision": "2026-09-15",
+    "manuscript": "unchanged",
+    "source_floor": "deferred by author; not newly certified"
+  },
+  {
+    "paper_id": "nsq:skipjack-protocol",
+    "series": "AI Governance Series",
+    "file": "papers/skipjack-protocol-v1-preprint.pdf",
+    "doi": "10.5281/zenodo.22771554",
+    "sha256": "1ece435b49768e1f1630cbf4b8ce60a02ae4a633dd4fee4effb925307a99a773",
+    "cover_revision": "2026-09-15",
+    "manuscript": "unchanged",
+    "source_floor": "deferred by author; not newly certified"
+  }
+]

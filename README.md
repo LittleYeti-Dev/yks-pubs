@@ -102,3 +102,21 @@ See [LICENSE](LICENSE) for the rights envelope.
 
 Justin H. Kuiper, CISSP — `justin@nonsequitur.tech`
 ORCID: [0009-0008-7099-3286](https://orcid.org/0009-0008-7099-3286)
+
+## Cover revisions — 2026-09-15
+
+Seven previously published papers received the standard dark NSQ cover. Their
+manuscripts remain unchanged. Substantive source-floor remediation was deferred
+by the author; these cover updates do not certify new research or review.
+The linked Zenodo versions and SHA-256 values are recorded in
+[the revision manifest](cover-revisions-2026-09-15.json). Existing paper download
+paths now serve those corrected covers; earlier versions remain in Git history
+and their original Zenodo records.
+
+- **AI Governance Series** — [nsq:agentic-substrate](papers/agentic-substrate-v1-preprint.pdf) · [Zenodo](https://doi.org/10.5281/zenodo.22771316)
+- **AI Governance Series** — [nsq:alistair-prime-in-a-box](papers/alistair-prime-in-a-box-v1-preprint.pdf) · [Zenodo](https://doi.org/10.5281/zenodo.22771501)
+- **AI Governance Series** — [nsq:edge-ai-doctrine](papers/edge-ai-doctrine-v1-preprint.pdf) · [Zenodo](https://doi.org/10.5281/zenodo.22771512)
+- **Foundations of Human-Governed Computing** — [nsq:epistemic-constraints](papers/epistemic-constraints-v1-1-preprint.pdf) · [Zenodo](https://doi.org/10.5281/zenodo.22771520)
+- **AI Governance Series** — [nsq:operating-model-agentic-teams](papers/operating-model-agentic-teams-v1-preprint.pdf) · [Zenodo](https://doi.org/10.5281/zenodo.22771534)
+- **The Implications of Edge Degraded Ops** — [nsq:rf-skipjack](papers/rf-skipjack-v0-3-preprint.pdf) · [Zenodo](https://doi.org/10.5281/zenodo.22771544)
+- **AI Governance Series** — [nsq:skipjack-protocol](papers/skipjack-protocol-v1-preprint.pdf) · [Zenodo](https://doi.org/10.5281/zenodo.22771554)
